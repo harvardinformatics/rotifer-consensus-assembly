@@ -1,0 +1,25 @@
+# OS / editor
+.DS_Store
+*~
+
+# python
+__pycache__/
+*.pyc
+
+# snakemake
+.snakemake/
+
+# conda envs materialized by --use-conda
+.snakemake/conda/
+
+# workflow outputs (workdir is external; never commit data)
+*.fa
+*.fasta
+*.fastq
+*.fastq.gz
+*.bam
+*.bai
+*.paf
+*.paf.gz
+*.png
+results/

@@ -1,0 +1,195 @@
+# ============================================================================
+# config.yaml -- ALL source material and ALL tunable parameters for the build.
+# The Snakefile hard-codes nothing tunable: to change inputs or any threshold,
+# edit this file only. Provenance of every non-obvious choice is documented in
+# README.md ("Parameter provenance"); inline comments here point to it.
+#
+# The build runs in THREE phases with a human break between each (see README):
+#   Phase A  filter reads -> purge -> scaffold -> QC-on-scaffolds   [set cut_sites]
+#   Phase B  apply cuts -> re-QC -> cross-isolate correspondence     [set consensus]
+#   Phase C  build consensus reference -> contamination screen -> final QC
+# ============================================================================
+
+isolates: [MA, MM]
+threads: 32
+
+workdir: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/final_ibd/fourhap/asm_build_v2
+
+# ---- tool locations (Cannon = conda env bins, NOT modules) -----------------
+# tools resolved as {conda_base}/envs/{env}/bin/<tool> in the Snakefile.
+conda_base: /n/home12/tsackton/miniforge3        # `conda info --base`
+env_map:      switch_verify     # minimap2 2.31, samtools, python (+pysam, matplotlib)
+env_linked:   linkedreads       # purge_dups suite, arcs/arcs-make, LINKS
+env_merqury:  merq_env          # meryl, merqury.sh
+env_blast:    busco_env         # blastn, blastx, dustmasker
+scriptdir:    /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/rebuild/scripts
+
+# ============================================================================
+# INPUTS
+# ============================================================================
+# 1. primary assemblies -- hifiasm --ont primary contigs, FCS-GX + FCS-adaptor
+#    screened upstream (provenance: eosipova clean_assemblies_no_adap; see README).
+primary:
+  MA: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MA.clean_no_adap.p_ctg.fa
+  MM: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MM.clean_no_adap.p_ctg.fa
+
+# 2. ONT reads -- RAW fastq_pass file lists (BOTH runs per isolate). The >=10 kb
+#    filter is applied IN-workflow (rule filter_ont) so the pipeline is fully
+#    reproducible from pass reads. Lists were built from all 4 run dirs:
+#    MA = EBrandin_1_MASRE + EBrandin_MA2 ; MM = EBrandin_2_MMSRE + EBrandin_MM2.
+ont_fastq_list:
+  MA: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/ma_all_ont.list
+  MM: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/mm_all_ont.list
+ont_min_len: 10000              # PROVENANCE: recovered dkhost FILT threshold (README)
+
+# 3. 10x linked reads for ARKS -- ALL lanes per isolate (L002 + L003).
+#    Isolate identity RESOLVED: 4228-MM-0004 = MA, 4228-MM-0005 = MM (0006 = 3rd
+#    sample, unused). R1 carries a 16 bp barcode at bp 1-16.
+tenx_R1:
+  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L002_R1_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L003_R1_001.fastq.gz]
+  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L002_R1_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L003_R1_001.fastq.gz]
+tenx_R2:
+  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L002_R2_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L003_R2_001.fastq.gz]
+  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L002_R2_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L003_R2_001.fastq.gz]
+barcode_len: 16                 # 10x Genomics GEM barcode length (chemistry-fixed)
+
+# ============================================================================
+# PHASE 0 -- prep reference (contamination screen on the PRIMARIES)
+# ============================================================================
+# Screen each primary with (a) a FRESH current-db FCS-GX run and (b) a
+# blobtools-style GC/coverage/taxonomy analysis, because the ORIGINAL FCS-GX
+# (db build 2023-01-24) under-detected: it removed 5 contigs but left ~65 Mb of
+# high-GC contigs in MM, incl. 5 circular (complete) bacterial genomes.
+# Phase 0 emits, per primary (in {workdir}/{iso}/prep/):
+#   {iso}.contam_report.tsv       data: per-contig GC, coverage, taxonomy, calls, reason
+#   {iso}.remove_candidates.txt   auto-flagged contig names (SUPERSET, for review)
+#   {iso}.blob.png / .gc_hist.png / .cov_hist.png   evaluation plots
+# >>> PAUSE: review the report + plots, then create {iso}/prep/{iso}.remove.txt
+#     (the VERIFIED removal list; `cp` the candidates if you agree with all). <<<
+# prep_reference (first rule of Phase A) drops {iso}.remove.txt from the primary,
+# so the ENTIRE downstream build + QC run on the decontaminated assembly.
+prep:
+  cov_reads: ont                 # coverage source for the blob plot (the filtered ONT set)
+  # --- FCS-GX, FRESH run with a CURRENT db (original used db build 2023-01-24) ---
+  run_fcsgx: false               # set true ONCE the gx container + db are provisioned
+  fcsgx_py:  /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Scripts/fcs/fcs.py
+  fcsgx_sif: /PATH/TO/fcs-gx.sif        # NOT on Cannon -- download from NCBI FCS releases
+  fcsgx_db:  /PATH/TO/current/gxdb      # NOT on Cannon -- ~470 GB current GX db, provision
+  fcsgx_taxid: 104788            # M. quadricornifera (NCBI taxon 104788) -> anml:rotifers
+  # --- blobtools-style (DIY; blobtools not installed) ---
+  blob_gc_flag: 0.45             # GC above this -> BLAST + flag candidate (rotifer host ~0.30)
+  blob_windows_per_contig: 3
+  blob_window_bp: 2000
+  blob_run_blastx: false         # also blastx->nr on candidates (slower, protein-level)
+  # nt/nr dbs are reused from the `contam:` section below.
+
+# ============================================================================
+# PHASE A -- purge + scaffold
+# ============================================================================
+ont_map_preset: map-ont         # minimap2 preset for ONT read depth (purge + QC)
+purge:
+  self_preset: asm5             # minimap2 self-alignment preset (purge_dups standard)
+  self_flags: "-DP"             # purge_dups self-aln flags (standard)
+  # calcuts cutoffs, PER ISOLATE. MA auto-detects diploid ("" = defaults). MM's
+  # ONT depth is bimodal (~58x/116x) and calcuts mis-calls it haploid -> manual
+  # diploid cutoffs (valley 85). PROVENANCE: README.
+  calcuts_opts:
+    MA: ""
+    MM: "-l 25 -m 85 -u 180"
+  get_seqs_opts: "-e"           # purge haplotypic dups only at contig ends (conservative)
+
+# ARKS kmer mode (arcs-make arks). PROVENANCE: values below must match the run
+# that produced the accepted scaffolds -- VERIFY against SLURM logs (README).
+arks:
+  output_glob: "draft*_scaffolds.fa"   # ARKS names output by params; pinned via README note
+  params: "c=5 m=50-10000 s=98 z=500 l=4 a=0.7 k=30"
+
+# ============================================================================
+# PHASE B -- de-chimerization cuts  (SET AT THE PHASE-A BREAK)
+# ============================================================================
+# CHOSEN BY HUMAN from Phase-A QC (synteny partner-tracks + ONT read-span):
+# cut only where synteny says chromosome-boundary AND reads show no span.
+# pos_mb is snapped to the nearest N-gap within cut_snap_bp. Leave lists EMPTY
+# for a from-scratch run, populate after inspecting Phase-A QC. Values below are
+# the 2026-07-22 draft decisions (record; RE-DERIVE for the final run).
+cut_snap_bp: 20000
+cut_sites:
+  MA:
+    - {scaffold: scaffold1, pos_mb: 31.1}
+    - {scaffold: scaffold1, pos_mb: 64.1}
+    - {scaffold: scaffold2, pos_mb: 32.1}
+  MM:
+    - {scaffold: scaffold4, pos_mb: 47.1}
+    - {scaffold: scaffold1, pos_mb: 24.9}
+    - {scaffold: scaffold2, pos_mb: 28.3}
+
+# ---- cross-isolate synteny (used in BOTH phase A on scaffolds and B on cuts) --
+synteny:
+  preset: asm5                  # MA vs MM ~2% (allelic) -> asm5; asm20 for ohnolog scale
+  min_aln_bp: 1000000           # min shared aligned bp to draw a correspondence edge
+  dotplot_min_len_bp: 20000     # min alignment length to plot
+
+# ============================================================================
+# PHASE C -- consensus reference  (SET AT THE PHASE-B BREAK)
+# ============================================================================
+# Built from the per-isolate cut assemblies by best-per-chromosome selection +
+# optional joins + unplaced carry-through. Contig names are ISOLATE-PREFIXED
+# (MA:<name> / MM:<name>) because the two isolates share scaffold names.
+# PROVENANCE: chosen from the Phase-B correspondence table (README). Values below
+# are the 2026-07-22 draft _reps.txt; RE-DERIVE for the final run.
+consensus:
+  gap_len: 100                  # N-run length inserted at any join
+  chromosomes:                  # name -> representative source contig
+    - {name: chr01, take: "MM:scaffold3"}
+    - {name: chr02, take: "MM:scaffold4_p1"}
+    - {name: chr03, take: "MM:scaffold4_p2"}
+    - {name: chr04, take: "MA:scaffold2_p1"}
+    - {name: chr05, take: "MM:scaffold1_p2"}
+    - {name: chr06, take: "MA:scaffold1_p1"}
+    - {name: chr07, take: "MM:scaffold2_p1"}
+    - {name: chr08, take: "MM:scaffold2_p2"}
+  joins: []                     # optional: [{name: chrNN, pieces: ["MA:x","MA:y"]}]
+  unplaced:                     # carried through, renamed unpl01.. in size order
+    - "MA:scaffold6"
+    - "MA:scaffold7"
+    - "MA:scaffold8"
+    - "MA:scaffold9"
+    - "MM:scaffold6"
+    - "MM:scaffold7"
+    - "MM:scaffold12"
+    - "MM:scaffold16"
+    - "MM:scaffold17"
+
+# ---- contamination screen on the consensus --------------------------------
+# PROVENANCE: unpl02/unpl03 (MM scaffold6/7) flagged this session (GC ~66%,
+# bacterial). Screen flags candidates; `drop_contigs` is the reviewed removal
+# list (a small manual confirm) -> produces the CLEANED final reference.
+contam:
+  gc_flag_high: 0.50            # flag contigs with GC above this (rotifer core ~0.30)
+  run_blast: true               # windowed blastn->nt + blastx->nr taxonomy on flagged
+  nt_db: /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt
+  nr_db: /n/netscratch/informatics/Everyone/external_repos/blast/nr/latest/nr
+  windows_per_contig: 20
+  window_bp: 2000
+  drop_contigs: []              # SET after reviewing contam_report. CONFIRMED bacterial
+                                # 2026-07-23 (blastn nt): MM scaffold6 = Reyranella/Enhydrobacter
+                                # (a-proteobacteria); MM scaffold7 = Variovorax sp. WT075 (100% id).
+                                # In the draft these were consensus unpl02/unpl03 -> drop by final name.
+
+# ============================================================================
+# QC thresholds (exposed so results are reproducible / auditable)
+# ============================================================================
+qc:
+  meryl_k: 19                   # merqury k-mer size (standard for ~300 Mb genome)
+  merqury_reads: R2             # 10x reads used for meryl (R2 = genomic; R1 has barcode)
+  cov_collapse_ratio: 1.7       # per-scaffold depth / median > this  -> COLLAPSE flag
+  cov_lowcov_frac: 0.3          # per-scaffold depth < frac * median  -> LOWCOV flag
+  telo_topkmer_frac: 0.25       # terminal dominant-6mer fraction     -> telomere array
+  telo_canonical_frac: 0.30     # terminal TTAGGG-family density       -> telomere
+  join_qc_min_scaffold_mb: 10   # only report join QC for scaffolds >= this
+  join_qc_flank_bp: 3000        # +/- window a read must span to "support" a gap
+  join_qc_min_span: 5           # spanning reads below this -> UNSUPPORTED (candidate cut)
