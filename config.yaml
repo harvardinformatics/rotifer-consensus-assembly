@@ -4,10 +4,11 @@
 # edit this file only. Provenance of every non-obvious choice is documented in
 # README.md ("Parameter provenance"); inline comments here point to it.
 #
-# The build runs in THREE phases with a human break between each (see README):
-#   Phase A  filter reads -> purge -> scaffold -> QC-on-scaffolds   [set cut_sites]
-#   Phase B  apply cuts -> re-QC -> cross-isolate correspondence     [set consensus]
-#   Phase C  build consensus reference -> contamination screen -> final QC
+# The build runs in FOUR phases with a human break between each (see README):
+#   Phase 0  contamination screen on the primaries        [make {iso}.remove.txt]
+#   Phase A  prep(decontam) -> purge -> scaffold -> QC     [set cut_sites]
+#   Phase B  apply cuts -> re-QC -> cross-isolate corresp. [set consensus]
+#   Phase C  build consensus -> contamination net -> final QC
 # ============================================================================
 
 isolates: [MA, MM]
@@ -15,14 +16,10 @@ threads: 32
 
 workdir: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/final_ibd/fourhap/asm_build_v2
 
-# ---- tool locations (Cannon = conda env bins, NOT modules) -----------------
-# tools resolved as {conda_base}/envs/{env}/bin/<tool> in the Snakefile.
-conda_base: /n/home12/tsackton/miniforge3        # `conda info --base`
-env_map:      switch_verify     # minimap2 2.31, samtools, python (+pysam, matplotlib)
-env_linked:   linkedreads       # purge_dups suite, arcs/arcs-make, LINKS
-env_merqury:  merq_env          # meryl, merqury.sh
-env_blast:    busco_env         # blastn, blastx, dustmasker
-scriptdir:    /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/rebuild/scripts
+# ---- software is provisioned by Snakemake, NOT by paths --------------------
+# conda envs in envs/*.yaml (rule `conda:` directives) + the FCS-GX container.
+# Run with:  snakemake --sw-deployment-method conda apptainer ...
+# (scripts are found relative to the Snakefile via workflow.basedir/scripts).
 
 # ============================================================================
 # INPUTS
@@ -75,10 +72,11 @@ barcode_len: 16                 # 10x Genomics GEM barcode length (chemistry-fix
 prep:
   cov_reads: ont                 # coverage source for the blob plot (the filtered ONT set)
   # --- FCS-GX, FRESH run with a CURRENT db (original used db build 2023-01-24) ---
-  run_fcsgx: false               # set true ONCE the gx container + db are provisioned
-  fcsgx_py:  /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Scripts/fcs/fcs.py
-  fcsgx_sif: /PATH/TO/fcs-gx.sif        # NOT on Cannon -- download from NCBI FCS releases
-  fcsgx_db:  /PATH/TO/current/gxdb      # NOT on Cannon -- ~470 GB current GX db, provision
+  run_fcsgx: false               # set true to add a fresh FCS-GX pass (Snakemake pulls the
+                                 # container; rule fetch_gxdb syncs the db). blob screen runs regardless.
+  fcsgx_image: docker://ncbi/fcs-gx:0.5.5                # Snakemake pulls this (apptainer)
+  fcsgx_db_dir: /n/netscratch/informatics/Lab/tsackton/rotifer_tmp/gxdb   # fetch_gxdb syncs here (~470 GB; needs network)
+  fcsgx_manifest: https://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/FCS/database/latest/all.manifest
   fcsgx_taxid: 104788            # M. quadricornifera (NCBI taxon 104788) -> anml:rotifers
   # --- blobtools-style (DIY; blobtools not installed) ---
   blob_gc_flag: 0.45             # GC above this -> BLAST + flag candidate (rotifer host ~0.30)

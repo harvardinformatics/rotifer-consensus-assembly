@@ -30,11 +30,13 @@ p.add_argument("--candidates", required=True)
 p.add_argument("--plotprefix", required=True)
 args = p.parse_args()
 
-# GC + length
+# GC + length  (seqkit fx2tab -n -l -g: "name<TAB>length<TAB>GC%", no header)
 gc, length = {}, {}
-for i, l in enumerate(open(args.gc)):
-    if i == 0 or not l.strip(): continue
-    f = l.split("\t"); length[f[0]] = int(f[1]); gc[f[0]] = float(f[2])
+for l in open(args.gc):
+    if l.startswith("#") or not l.strip(): continue
+    f = l.split("\t"); g = float(f[2])
+    if g > 1.5: g /= 100.0            # seqkit reports GC as a percentage -> fraction
+    length[f[0]] = int(f[1]); gc[f[0]] = g
 
 # coverage (samtools coverage: col1 rname, col7 meandepth)
 cov = {}

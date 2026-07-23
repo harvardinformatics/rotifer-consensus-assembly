@@ -1,0 +1,10 @@
+name: autobuild-blast
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - blast=2.16.0
+  - seqkit=2.9.0
+  - samtools=1.21
+  - python=3.12
+  - matplotlib-base=3.9.2

@@ -40,9 +40,12 @@ flowchart TD
 ## Running in pieces (four phases, manual break between each)
 
 ```bash
-cd switch_verification/rebuild
-snakemake -n                                   # dry run / sanity
-SLURM="--executor slurm -j 200 --default-resources slurm_account=informatics slurm_partition=sapphire"
+cd rotifer-assembly/autobuild
+snakemake -n --sw-deployment-method conda      # dry run / sanity
+# software: conda envs (envs/*.yaml). Add `apptainer` ONLY when running FCS-GX
+# (prep.run_fcsgx: true) so the container is pulled only when actually needed:
+SLURM="--sw-deployment-method conda --executor slurm -j 200 \
+       --default-resources slurm_account=informatics slurm_partition=sapphire"
 
 snakemake $SLURM phase0                        # contamination screen on the primaries
 #   >>> review {workdir}/{iso}/prep/{iso}.contam_report.tsv + *.blob.png/*hist.png ,
@@ -101,22 +104,22 @@ of every manual decision.
 
 ## Rules → scripts
 
-**Phase 0:** `prep_cov` (minimap2+samtools coverage) · `prep_fcsgx` (fresh FCS-GX, gated) · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference`→`fasta_select.py --drop-file`.
-**Phases A–C:** `filter_ont`→`filt_len.sh` · `prep_10x` (inline awk) · `purge_dups`/`scaffold_arks`
-(purge_dups suite + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py`
-· `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed nodes) ·
-`build_consensus`→`build_consensus.py` (from JSON spec, no YAML dep) · `contam_screen`→
-`asm_stats.py`+`make_windows.py`+blast+`contam_report.py` · `finalize_ref`→`fasta_select.py`
-· `qc_coverage`→`cov_qc.py` · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`
-· `asm_stats`→`asm_stats.py` · `versions`.
+Standard tools are used directly (no in-house reimplementations): **seqkit** filters
+reads by length (`filter_ont`), reports per-contig GC (`fx2tab`) and summary stats
+(`stats -a`), and selects/drops contigs (`grep -v -f`, replacing the old
+`fasta_select.py`/`asm_stats.py`/`filt_len.sh`).
+
+**Phase 0:** `prep_cov` (minimap2+samtools) · `prep_fcsgx` (FCS-GX container; gated) · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (`seqkit grep -v`).
+**Phases A–C:** `filter_ont` (`seqkit seq -m`) · `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
 
 ## Requirements / caveats
 
-- **Conda envs** (`config.conda_base`/env names): `env_map` needs minimap2 2.31 + samtools + python with **pysam & matplotlib**; `env_linked` the purge_dups suite + arcs/arcs-make + LINKS; `env_merqury` meryl + merqury.sh; `env_blast` blast+ + dustmasker. `versions` records the exact versions at run time.
+- **Software = Snakemake-managed, not paths.** Each rule declares `conda: envs/*.yaml` (`bioinf` minimap2/samtools/seqkit/pysam/matplotlib; `purge_dups`; `arcs`+links; `merqury`+meryl; `blast`) and FCS-GX rules declare the `container:`. Run with `--sw-deployment-method conda apptainer`. The pinned env YAMLs are the version record. Adjust pins if a version fails to solve.
+- **Intermediates are `temp()`** — the barcoded 10x fastq and QC BAMs delete after their consumer; purge_dups/coverage BAMs and paf.gz are removed in-rule. The filtered ONT sets are kept (reused across phases).
 - **`prep_10x` is the least-validated step** — the BX-tagging awk assumes a 16 bp R1 prefix barcode with no whitelist correction. **Reconcile against how the accepted scaffolds were actually built before trusting a fresh scaffold.**
 - **ARKS output name** is parameter-dependent; `scaffold_arks` requires exactly one file matching `arks.output_glob` and fails loudly otherwise (keeps the run deterministic).
 - **`contam.run_blast: true`** does a windowed nt+nr BLAST on GC-flagged contigs — hours on a shared node; set `false` to rely on GC alone.
 - Merqury runs **per isolate on its own cut assembly** (not the merged ref) to avoid the cross-isolate confound; interpret QV/completeness with the k-mer-completeness stratification (a purged haploid necessarily "misses" the alternate heterozygous allele).
 - **Decontamination is now in-workflow (Phase 0)**, because the upstream FCS-GX (db 2023-01-24) under-detected — it left ~65 Mb of high-GC contigs in MM including 5 circular complete bacterial genomes (`ptg000065c` Reyranella, `ptg000035c` Variovorax @100%, `036c/094c/067c`). Phase 0 re-screens the primaries and removes the verified set before anything else runs; the end-of-pipeline `contam_screen` is a second-line net on the final reference.
-- **`prep_fcsgx` needs provisioning:** a current GX database (~470 GB) + the `fcs-gx.sif` container — neither is on Cannon yet (`prep.run_fcsgx: false` by default). Until then the blobtools-style GC+coverage+BLAST screen (tools we have) is the workhorse; it clearly separates the high-GC contaminant contigs from the ~30%-GC host.
+- **`prep_fcsgx` (fresh FCS-GX):** Snakemake pulls the `docker://ncbi/fcs-gx` container and `fetch_gxdb` syncs the current GX db (~470 GB, needs network — run the fetch where there's internet). Off by default (`prep.run_fcsgx: false`); the blobtools-style GC+coverage+BLAST screen runs regardless and cleanly separates the high-GC contaminants from the ~30%-GC host. The exact in-container `run_gx.py`/`sync_files.py` invocations are marked `VERIFY` in the Snakefile — confirm against the pulled image version before enabling.
 - **`blob_report.py` is a DIY blobtools** (the real blobtools isn't installed): GC vs ONT-coverage scatter (sized by length, colored host/candidate/contaminant) + GC/coverage histograms, with candidates flagged by FCS-GX ∪ high-GC ∪ non-metazoan BLAST.
