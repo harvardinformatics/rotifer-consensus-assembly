@@ -16,7 +16,7 @@ the `Snakefile` hard-codes nothing tunable. This doc doubles as the methods draf
 ```mermaid
 flowchart TD
   subgraph A["Phase A — assemble + scaffold (per isolate)"]
-    RAW["raw ONT fastq_pass (both runs)"] -->|filter_ont ≥10kb| ONT["ONT ≥10kb"]
+    ONT["ONT reads ≥10 kb<br/>(finalized input)"]
     PRI["primary.fa (FCS-screened)"] --> PD["purge_dups"]
     ONT --> PD --> PG["purged.fa"]
     TX["10x reads (all lanes)"] -->|prep_10x BX-tag| BX["barcoded interleaved"]
@@ -76,8 +76,7 @@ of every manual decision.
 | param | value | where it comes from |
 |---|---|---|
 | `primary.*` | eosipova `*.clean_no_adap.p_ctg.fa` | hifiasm `--ont` primary contigs, FCS-GX (`anml:rotifers`) + FCS-adaptor screened upstream |
-| `ont_min_len` | 10000 | **recovered dkhost `FILT` threshold** — the assembly's `*.FILT.fastq` has a hard 10 kb minimum (mean 24.6 kb); raw pass min <20 bp |
-| `ont_fastq_list.*` | `{ma,mm}_all_ont.list` | all `fastq_pass` from **both** ONT runs per isolate (MA: `EBrandin_1_MASRE`+`EBrandin_MA2`; MM: `EBrandin_2_MMSRE`+`EBrandin_MM2`) |
+| `ont_reads.*` | `source-data/ont-2024-filt/{MA,MM}.ont.filt10k.fastq.gz` | **finalized ≥10 kb ONT** (both 2024 runs pooled per isolate); consumed directly, not re-filtered. Full provenance (source runs, 10 kb = recovered dkhost `FILT` threshold, exact command) in that directory's `README.md` |
 | `tenx_R1/R2.*` | 4228-MM-0004 (MA), 0005 (MM), lanes L002+L003 | isolate ID resolved by mapping 10x R2 to hap1 (0.66% vs 1.99% cross); 0006 is a 3rd sample, unused |
 | `barcode_len` | 16 | 10x Genomics GEM barcode (chemistry-fixed) |
 | `prep.run_fcsgx` | false | fresh FCS-GX needs a current GX db + container, **not present on Cannon** (original report was dkhost's, db 2023-01-24). Provision, then set true |
@@ -104,13 +103,13 @@ of every manual decision.
 
 ## Rules → scripts
 
-Standard tools are used directly (no in-house reimplementations): **seqkit** filters
-reads by length (`filter_ont`), reports per-contig GC (`fx2tab`) and summary stats
-(`stats -a`), and selects/drops contigs (`grep -v -f`, replacing the old
-`fasta_select.py`/`asm_stats.py`/`filt_len.sh`).
+Standard tools are used directly (no in-house reimplementations): **seqkit** reports
+per-contig GC (`fx2tab`) and summary stats (`stats -a`), and selects/drops contigs
+(`grep -v -f`) — replacing the old `fasta_select.py`/`asm_stats.py`/`filt_len.sh`. (ONT
+read filtering is now an upstream step; the pipeline consumes the finalized reads.)
 
 **Phase 0:** `prep_cov` (minimap2+samtools) · `prep_fcsgx` (FCS-GX container; gated) · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (`seqkit grep -v`).
-**Phases A–C:** `filter_ont` (`seqkit seq -m`) · `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
+**Phases A–C:** `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
 
 ## Requirements / caveats
 

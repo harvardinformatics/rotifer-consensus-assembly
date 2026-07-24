@@ -71,19 +71,9 @@ rule all:   # Phase C
 # ===========================================================================
 # INPUT PREP
 # ===========================================================================
-# ONT: raw fastq_pass -> >= ont_min_len set (seqkit; reusable across phases -> NOT temp)
-rule filter_ont:
-    input:  lst = lambda wc: config["ont_fastq_list"][wc.iso]
-    output: filt = f"{WD}/{{iso}}/reads/{{iso}}.ont.filt.fastq.gz"
-    params: minlen = config["ont_min_len"]
-    conda: "envs/bioinf.yaml"
-    threads: 8
-    resources: mem_mb=8000, runtime=360
-    shell:
-        r"""
-        mkdir -p $(dirname {output.filt})
-        seqkit seq -j {threads} -m {params.minlen} -o {output.filt} $(cat {input.lst})
-        """
+# ONT reads are a FINALIZED input (>=10 kb, both runs pooled per isolate) supplied
+# via config `ont_reads`; exact provenance is in source-data/ont-2024-filt/README.md.
+# The pipeline consumes them directly -- no in-workflow filtering.
 
 # 10x: R1 16 bp barcode -> BX:Z tag, interleave ALL lanes (temp: only ARKS consumes it)
 rule prep_10x:
@@ -114,7 +104,7 @@ rule prep_10x:
 rule prep_cov:
     input:
         pri = lambda wc: config["primary"][wc.iso],
-        ont = f"{WD}/{{iso}}/reads/{{iso}}.ont.filt.fastq.gz",
+        ont = lambda wc: config["ont_reads"][wc.iso],
     output: cov = f"{WD}/{{iso}}/prep/cov.txt"
     params: pre = config["ont_map_preset"], d = f"{WD}/{{iso}}/prep"
     conda: "envs/bioinf.yaml"
@@ -241,7 +231,7 @@ rule prep_reference:
 rule purge_dups:
     input:
         pri = f"{WD}/{{iso}}/prep/{{iso}}.prepped.fa",
-        ont = f"{WD}/{{iso}}/reads/{{iso}}.ont.filt.fastq.gz",
+        ont = lambda wc: config["ont_reads"][wc.iso],
     output: purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa"
     params:
         d = f"{WD}/{{iso}}/purge", map_pre = config["ont_map_preset"],
@@ -313,7 +303,7 @@ rule split_cuts:
 rule map_ont:
     input:
         fa  = lambda wc: asm(wc.stage).format(iso=wc.iso),
-        ont = f"{WD}/{{iso}}/reads/{{iso}}.ont.filt.fastq.gz",
+        ont = lambda wc: config["ont_reads"][wc.iso],
     output:
         bam = temp(f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam"),
         bai = temp(f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam.bai"),
@@ -444,7 +434,7 @@ rule finalize_ref:
 rule qc_coverage:
     input:
         fa  = f"{WD}/consensus/MAMM_final.fa",
-        ont = expand(f"{WD}/{{iso}}/reads/{{iso}}.ont.filt.fastq.gz", iso=ISO),
+        ont = [config["ont_reads"][i] for i in ISO],
     output: cov = f"{WD}/consensus/cov_qc.txt"
     params:
         d = f"{WD}/consensus/covqc", isos = " ".join(ISO),
@@ -457,8 +447,10 @@ rule qc_coverage:
     shell:
         r"""
         mkdir -p {params.d}
-        for X in {params.isos}; do
-            minimap2 -ax {params.pre} -t {threads} {input.fa} {WD}/$X/reads/$X.ont.filt.fastq.gz 2>{params.d}/$X.log \
+        isos=({params.isos}); reads=({input.ont})
+        for k in ${{!isos[@]}}; do
+            X=${{isos[$k]}}; R=${{reads[$k]}}
+            minimap2 -ax {params.pre} -t {threads} {input.fa} $R 2>{params.d}/$X.log \
               | samtools sort -@8 -m3G -o {params.d}/$X.bam -
             samtools index {params.d}/$X.bam
             samtools coverage {params.d}/$X.bam > {params.d}/cov_$X.txt

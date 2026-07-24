@@ -30,14 +30,13 @@ primary:
   MA: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MA.clean_no_adap.p_ctg.fa
   MM: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MM.clean_no_adap.p_ctg.fa
 
-# 2. ONT reads -- RAW fastq_pass file lists (BOTH runs per isolate). The >=10 kb
-#    filter is applied IN-workflow (rule filter_ont) so the pipeline is fully
-#    reproducible from pass reads. Lists were built from all 4 run dirs:
-#    MA = EBrandin_1_MASRE + EBrandin_MA2 ; MM = EBrandin_2_MMSRE + EBrandin_MM2.
-ont_fastq_list:
-  MA: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/ma_all_ont.list
-  MM: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/mm_all_ont.list
-ont_min_len: 10000              # PROVENANCE: recovered dkhost FILT threshold (README)
+# 2. ONT reads -- FINALIZED length-filtered (>=10 kb) sets, both runs pooled per
+#    isolate. Made upstream; the pipeline consumes these directly (does NOT re-filter).
+#    EXACT provenance (source runs, 10 kb threshold, command) is documented in
+#    source-data/ont-2024-filt/README.md next to the files.
+ont_reads:
+  MA: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/ont-2024-filt/MA.ont.filt10k.fastq.gz
+  MM: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/ont-2024-filt/MM.ont.filt10k.fastq.gz
 
 # 3. 10x linked reads for ARKS -- ALL lanes per isolate (L002 + L003).
 #    Isolate identity RESOLVED: 4228-MM-0004 = MA, 4228-MM-0005 = MM (0006 = 3rd
