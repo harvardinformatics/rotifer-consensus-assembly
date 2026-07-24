@@ -272,14 +272,14 @@ rule prep_report:   # combine GC + coverage + taxonomy (+ FCS-GX) -> report + ca
 # {iso}.remove.txt is created by the user from Phase-0 candidates (empty = keep all).
 rule prep_reference:
     input:
-        pri    = lambda wc: config["primary"][wc.iso],
-        remove = f"{WD}/{{iso}}/prep/{{iso}}.remove.txt",
+        pri     = lambda wc: config["primary"][wc.iso],
+        rmlist  = f"{WD}/{{iso}}/prep/{{iso}}.remove.txt",
     output: fa = f"{WD}/{{iso}}/prep/{{iso}}.prepped.fa"
     conda: "envs/bioinf.yaml"
     resources: mem_mb=4000, runtime=60
     shell:
         r"""
-        if [ -s {input.remove} ]; then seqkit grep -v -f {input.remove} {input.pri} -o {output.fa}
+        if [ -s {input.rmlist} ]; then seqkit grep -v -f {input.rmlist} {input.pri} -o {output.fa}
         else cp {input.pri} {output.fa}; fi
         """
 
