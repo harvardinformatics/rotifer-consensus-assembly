@@ -117,7 +117,7 @@ rule prep_cov:
     params: pre = config["ont_map_preset"], d = f"{WD}/{{iso}}/prep"
     conda: "envs/bioinf.yaml"
     threads: T
-    resources: mem_mb=40000, runtime=600
+    resources: mem_mb=128000, runtime=600   # ONT map|sort peaks ~38G; 40G OOM-killed both isolates (2026-07-24)
     shell:
         r"""
         mkdir -p {params.d}
@@ -369,7 +369,7 @@ rule map_ont:
     params: pre = config["ont_map_preset"]
     conda: "envs/bioinf.yaml"
     threads: T
-    resources: mem_mb=40000, runtime=600
+    resources: mem_mb=128000, runtime=600   # same ONT map|sort OOM as prep_cov (2026-07-24)
     shell:
         r"""
         mkdir -p $(dirname {output.bam})
