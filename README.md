@@ -66,7 +66,7 @@ snakemake $SLURM phaseB                        # ARKS scaffold -> scaffold QC ->
 #   >>> inspect {iso}/qc_scaffold/ + synteny_scaffold/ , then edit config cut_sites <<<
 snakemake $SLURM phaseC                        # apply cut_sites -> re-QC -> correspondence
 #   >>> inspect synteny_cut/correspondence.tsv + dotplot , then edit config consensus (+ joins) <<<
-snakemake $SLURM                               # final (rule all): consensus -> contam net -> QC
+snakemake $SLURM all                           # final (rule all): consensus -> contam net -> QC
 #   >>> review consensus/contam_report.tsv , set config contam.drop_contigs , re-run <<<
 ```
 
