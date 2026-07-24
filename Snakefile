@@ -53,14 +53,19 @@ rule phase0:
         expand(f"{WD}/{{iso}}/prep/{{iso}}.remove_candidates.txt", iso=ISO),
         expand(f"{WD}/{{iso}}/prep/{{iso}}.blob.png",              iso=ISO),
 
-rule phaseA:
+rule phaseA:   # decontam + purge_dups, then STOP -- review the purge before heavy ARKS scaffolding
+    input:
+        expand(f"{WD}/{{iso}}/purge/{{iso}}.purge_stats.txt", iso=ISO),
+        expand(f"{WD}/{{iso}}/purge/{{iso}}.purge_hist.png",  iso=ISO),
+
+rule phaseB:   # ARKS scaffold + scaffold QC + cross-isolate synteny
     input:
         expand(f"{WD}/{{iso}}/qc_scaffold/cov.{{iso}}.txt", iso=ISO),
         expand(f"{WD}/{{iso}}/qc_scaffold/join_qc.txt",     iso=ISO),
         f"{WD}/synteny_scaffold/correspondence.tsv",
         f"{WD}/synteny_scaffold/MAxMM_dotplot.png",
 
-rule phaseB:
+rule phaseC:   # de-chimerize (apply cut_sites) + re-QC + correspondence
     input:
         expand(f"{WD}/{{iso}}/qc_cut/cov.{{iso}}.txt", iso=ISO),
         expand(f"{WD}/{{iso}}/qc_cut/join_qc.txt",     iso=ISO),
@@ -316,7 +321,10 @@ rule purge_dups:
     input:
         pri = f"{WD}/{{iso}}/prep/{{iso}}.prepped.fa",
         ont = lambda wc: config["ont_reads"][wc.iso],
-    output: purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa"
+    output:
+        purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa",
+        stat   = f"{WD}/{{iso}}/purge/PB.stat",     # depth histogram (for purge_qc review)
+        cuts   = f"{WD}/{{iso}}/purge/cutoffs",     # calcuts thresholds actually used
     params:
         d = f"{WD}/{{iso}}/purge", map_pre = config["ont_map_preset"],
         self_pre = config["purge"]["self_preset"], self_fl = config["purge"]["self_flags"],
@@ -337,6 +345,31 @@ rule purge_dups:
         get_seqs {params.getseqs} dups.bed {input.pri}
         test -s purged.fa && mv purged.fa {output.purged}
         rm -f reads.paf.gz pri.split pri.split.self.paf.gz    # large intermediates
+        """
+
+# Phase-A review gate: summarize the purge so a human can sanity-check calcuts BEFORE the
+# heavy ARKS scaffolding. purge_hist.py overlays the calcuts cutoffs on the ONT depth
+# histogram (the key check for MM's possibly-bimodal / degenerate-tetraploid depth); the
+# stats file gives the cutoffs + before/after seqkit stats (how much sequence was purged).
+rule purge_qc:
+    input:
+        prepped = f"{WD}/{{iso}}/prep/{{iso}}.prepped.fa",
+        purged  = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa",
+        stat    = f"{WD}/{{iso}}/purge/PB.stat",
+        cuts    = f"{WD}/{{iso}}/purge/cutoffs",
+    output:
+        stats = f"{WD}/{{iso}}/purge/{{iso}}.purge_stats.txt",
+        hist  = f"{WD}/{{iso}}/purge/{{iso}}.purge_hist.png",
+    conda: "envs/bioinf.yaml"
+    resources: mem_mb=4000, runtime=30
+    shell:
+        r"""
+        echo "## calcuts cutoffs (haploid/diploid depth thresholds chosen by calcuts):" > {output.stats}
+        cat {input.cuts} >> {output.stats}
+        printf '\n## seqkit stats -- prepped (pre-purge) then purged (post-purge):\n' >> {output.stats}
+        seqkit stats -aT {input.prepped} {input.purged} >> {output.stats}
+        python {SD}/purge_hist.py --stat {input.stat} --cuts {input.cuts} \
+            --title "{wildcards.iso} purge_dups ONT depth" --out {output.hist}
         """
 
 rule scaffold_arks:

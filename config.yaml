@@ -87,15 +87,19 @@ prep:
   blob_window_bp: 2000
 
 # ============================================================================
-# PHASE A -- purge + scaffold
+# PHASE A (purge) + PHASE B (scaffold + QC)
 # ============================================================================
 ont_map_preset: map-ont         # minimap2 preset for ONT read depth (purge + QC)
 purge:
   self_preset: asm5             # minimap2 self-alignment preset (purge_dups standard)
   self_flags: "-DP"             # purge_dups self-aln flags (standard)
-  # calcuts cutoffs, PER ISOLATE. MA auto-detects diploid ("" = defaults). MM's
-  # ONT depth is bimodal (~58x/116x) and calcuts mis-calls it haploid -> manual
-  # diploid cutoffs (valley 85). PROVENANCE: README.
+  # calcuts cutoffs, PER ISOLATE ("" = calcuts auto-detects). Start both on auto:
+  # phaseA STOPS after purge so you review {iso}/purge/{iso}.purge_hist.png + cutoffs
+  # (purge_stats.txt) before scaffolding. If calcuts mis-reads the depth histogram, set
+  # manual "-l <low> -m <valley> -u <high>" here from the OBSERVED full-data peaks and
+  # re-run phaseA. NB an EARLIER PARTIAL-data run had MM bimodal ~58x/116x and calcuts
+  # mis-called it haploid; those old values (-l 25 -m 85 -u 180) are STALE for the full
+  # data (peaks shift) -- re-derive from the histogram, do not reuse.
   calcuts_opts:
     MA: ""
     MM: ""

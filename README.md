@@ -15,29 +15,32 @@ the `Snakefile` hard-codes nothing tunable. This doc doubles as the methods draf
 
 ```mermaid
 flowchart TD
-  subgraph A["Phase A — assemble + scaffold (per isolate)"]
-    ONT["ONT reads ≥10 kb<br/>(finalized input)"]
-    PRI["primary.fa (FCS-screened)"] --> PD["purge_dups"]
-    ONT --> PD --> PG["purged.fa"]
+  subgraph A["Phase A — decontaminate + purge (per isolate)"]
+    PRI["primary.fa (FCS-screened)"] -->|prep_reference: drop EXCLUDEs, trim TRIM ends| DEC["prepped.fa"]
+    ONT["ONT reads ≥10 kb<br/>(finalized input)"] --> PD["purge_dups (calcuts auto)"]
+    DEC --> PD --> PG["purged.fa + depth-hist + cutoffs"]
+  end
+  PG -.->|BREAK: review purge; set calcuts_opts if needed| B
+  subgraph B["Phase B — scaffold + QC (per isolate)"]
     TX["10x reads (all lanes)"] -->|prep_10x BX-tag| BX["barcoded interleaved"]
     PG & BX --> SC["ARKS scaffold → scaffold.fa"]
-    SC & ONT --> QA["QC on scaffolds: coverage + join-span + cross-isolate synteny"]
+    SC & ONT --> QB["QC: coverage + join-span + cross-isolate synteny"]
   end
-  QA -.->|BREAK: set cut_sites| B
-  subgraph B["Phase B — de-chimerize + re-QC"]
+  QB -.->|BREAK: set cut_sites| C
+  subgraph C["Phase C — de-chimerize + re-QC"]
     SC -->|apply_cuts| CUT["cut.fa"]
-    CUT & ONT --> QB["QC on cuts + correspondence table (1:1 / split / complex)"]
+    CUT & ONT --> QCc["QC on cuts + correspondence (1:1 / split / complex)"]
   end
-  QB -.->|BREAK: set consensus reps/joins| C
-  subgraph C["Phase C — consensus + clean + final QC"]
+  QCc -.->|BREAK: set consensus reps/joins| D
+  subgraph D["final (rule all) — consensus + clean + QC"]
     CUT --> MERGE["build_consensus → MAMM_merged.fa"]
     MERGE --> SCR["contam screen (GC + optional BLAST)"]
     SCR -.->|BREAK: set drop_contigs| FIN["finalize_ref → MAMM_final.fa"]
-    FIN --> QC["cov_qc • merqury/QV • k-mer completeness • asm_stats • versions"]
+    FIN --> QCf["cov_qc • merqury/QV • k-mer completeness • asm_stats"]
   end
 ```
 
-## Running in pieces (four phases, manual break between each)
+## Running in pieces (five stages, manual break between each)
 
 ```bash
 cd rotifer-assembly/autobuild
@@ -56,11 +59,14 @@ snakemake $SLURM phase0                        # contamination screen on the pri
 #       derive both from the FCS report:
 #         awk -F'\t' '!/^#/&&$5=="EXCLUDE"{print $1}' fcsgx_report.txt | sort -u > {iso}.remove.txt
 #         { grep '^#' fcsgx_report.txt; awk -F'\t' '$5=="TRIM"' fcsgx_report.txt; } > {iso}.trim.rpt <<<
-snakemake $SLURM phaseA                        # prep_reference (decontam) -> purge -> scaffold -> QC
+snakemake $SLURM phaseA                        # prep_reference (decontam) -> purge_dups -> purge QC ; STOPS
+#   >>> review {iso}/purge/{iso}.purge_hist.png + {iso}.purge_stats.txt (cutoffs + before/after N50).
+#       if calcuts mis-read the depth histogram, set purge.calcuts_opts and re-run phaseA <<<
+snakemake $SLURM phaseB                        # ARKS scaffold -> scaffold QC -> cross-isolate synteny
 #   >>> inspect {iso}/qc_scaffold/ + synteny_scaffold/ , then edit config cut_sites <<<
-snakemake $SLURM phaseB                        # cut -> re-QC -> correspondence
+snakemake $SLURM phaseC                        # apply cut_sites -> re-QC -> correspondence
 #   >>> inspect synteny_cut/correspondence.tsv + dotplot , then edit config consensus (+ joins) <<<
-snakemake $SLURM                               # Phase C (rule all): consensus -> contam net -> QC
+snakemake $SLURM                               # final (rule all): consensus -> contam net -> QC
 #   >>> review consensus/contam_report.tsv , set config contam.drop_contigs , re-run <<<
 ```
 
@@ -115,7 +121,7 @@ per-contig GC (`fx2tab`) and summary stats (`stats -a`), and selects/drops conti
 read filtering is now an upstream step; the pipeline consumes the finalized reads.)
 
 **Phase 0:** `prep_cov` (minimap2+samtools) · `fcsgx_tools`+`fetch_gxdb`+`prep_fcsgx` (`fcs.py` wrapper + Singularity) · `prep_windows` → `blast_chunk` (scatter over nt volume-chunks) → `blast_merge` · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (drop `{iso}.remove.txt` EXCLUDEs via `seqkit grep -v`; trim `{iso}.trim.rpt` TRIM ends via `fcs.py clean genome`; FIX/REVIEW in neither file → kept whole, since internal foreign spans are plausibly HGT).
-**Phases A–C:** `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
+**Phases A–final:** `prep_10x` (awk BX-tag) · `purge_dups` (purge_dups + calcuts) → `purge_qc`→`purge_hist.py` (depth-hist + before/after stats — the purge review gate) · `scaffold_arks` (arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
 
 ## Requirements / caveats
 
