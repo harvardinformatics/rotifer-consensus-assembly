@@ -75,7 +75,7 @@ of every manual decision.
 
 | param | value | where it comes from |
 |---|---|---|
-| `primary.*` | `assembly-build-20260723/assemblies-clean/{MA,MM}.clean_no_adap.p_ctg.fa` | hifiasm `--ont` primary contigs, FCS-GX + FCS-adaptor screened; provenance chain + residual-contamination caveat in `assemblies-clean/README.md` (Phase 0 finishes decontam) |
+| `primary.*` | `assembly-build-20260723/assemblies-prelim/{MA,MM}.clean_no_adap.p_ctg.fa` | hifiasm `--ont` primary contigs, FCS-GX + FCS-adaptor screened; provenance chain + residual-contamination caveat in `assemblies-prelim/README.md` (Phase 0 finishes decontam) |
 | `ont_reads.*` | `source-data/ont-2024-filt/{MA,MM}.ont.filt10k.fastq.gz` | **finalized ≥10 kb ONT** (both 2024 runs pooled per isolate); consumed directly, not re-filtered. Full provenance (source runs, 10 kb = recovered dkhost `FILT` threshold, exact command) in that directory's `README.md` |
 | `tenx_R1/R2.*` | 4228-MM-0004 (MA), 0005 (MM), lanes L002+L003 | isolate ID resolved by mapping 10x R2 to hap1 (0.66% vs 1.99% cross); 0006 is a 3rd sample, unused |
 | `barcode_len` | 16 | 10x Genomics GEM barcode (chemistry-fixed) |
