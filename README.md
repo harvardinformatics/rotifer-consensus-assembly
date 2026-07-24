@@ -50,8 +50,9 @@ SLURM="--sw-deployment-method conda --executor slurm -j 200 \
 
 snakemake $SLURM phase0                        # contamination screen on the primaries
 #   >>> review {workdir}/{iso}/prep/{iso}.contam_report.tsv + *.blob.png/*hist.png ,
-#       then create {workdir}/{iso}/prep/{iso}.remove.txt (the VERIFIED removal list;
-#       `cp {iso}.remove_candidates.txt {iso}.remove.txt` if you accept all; empty = keep all) <<<
+#       then create {workdir}/{iso}/prep/{iso}.remove.txt = confident whole-contig EXCLUDEs
+#       ONLY (one contig id per line; empty = keep all). Do NOT list FIX/TRIM/REVIEW contigs:
+#       prep_reference auto-trims TRIM ends (fcs.py clean) and keeps FIX/REVIEW whole (HGT-safe). <<<
 snakemake $SLURM phaseA                        # prep_reference (decontam) -> purge -> scaffold -> QC
 #   >>> inspect {iso}/qc_scaffold/ + synteny_scaffold/ , then edit config cut_sites <<<
 snakemake $SLURM phaseB                        # cut -> re-QC -> correspondence
@@ -110,7 +111,7 @@ per-contig GC (`fx2tab`) and summary stats (`stats -a`), and selects/drops conti
 (`grep -v -f`) — replacing the old `fasta_select.py`/`asm_stats.py`/`filt_len.sh`. (ONT
 read filtering is now an upstream step; the pipeline consumes the finalized reads.)
 
-**Phase 0:** `prep_cov` (minimap2+samtools) · `fcsgx_tools`+`fetch_gxdb`+`prep_fcsgx` (`fcs.py` wrapper + Singularity) · `prep_windows` → `blast_chunk` (scatter over nt volume-chunks) → `blast_merge` · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (`seqkit grep -v`).
+**Phase 0:** `prep_cov` (minimap2+samtools) · `fcsgx_tools`+`fetch_gxdb`+`prep_fcsgx` (`fcs.py` wrapper + Singularity) · `prep_windows` → `blast_chunk` (scatter over nt volume-chunks) → `blast_merge` · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (drop curated EXCLUDEs via `seqkit grep -v`; trim TRIM ends via `fcs.py clean genome`; FIX/REVIEW kept whole — internal foreign spans are plausibly HGT).
 **Phases A–C:** `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
 
 ## Requirements / caveats

@@ -268,19 +268,44 @@ rule prep_report:   # combine GC + coverage + taxonomy (+ FCS-GX) -> report + ca
             --report {output.report} --candidates {output.cand} --plotprefix {params.d}/{wildcards.iso}
         """
 
-# start of Phase A: drop the VERIFIED removal list from the primary (seqkit grep -v).
-# {iso}.remove.txt is created by the user from Phase-0 candidates (empty = keep all).
+# start of Phase A. Two decontamination actions on the primary:
+#   (1) DROP whole contigs the user curated into {iso}.remove.txt (confident EXCLUDEs).
+#   (2) TRIM terminal foreign spans FCS-GX marked TRIM -- a contaminant at a contig END
+#       is not reliably endogenous, so we cut it. FIX (internal) and REVIEW are LEFT WHOLE
+#       and never masked: an internal foreign span in a bdelloid is plausibly real HGT.
+# TRIM is applied by `fcs.py clean genome` (runs natively -- no container/db -- per the
+# NCBI quickstart) fed a TRIM-ONLY action report. Empty remove.txt + no TRIM rows => the
+# primary is copied through unchanged. {iso}.remove.txt is created by the user from the
+# Phase-0 candidates (the manual gate).
 rule prep_reference:
     input:
         pri     = lambda wc: config["primary"][wc.iso],
         rmlist  = f"{WD}/{{iso}}/prep/{{iso}}.remove.txt",
+        rpt     = f"{WD}/{{iso}}/prep/fcsgx_report.txt",
     output: fa = f"{WD}/{{iso}}/prep/{{iso}}.prepped.fa"
+    params:
+        py      = config["prep"]["fcsgx_tooldir"].rstrip("/") + "/fcs.py",
+        trim    = f"{WD}/{{iso}}/prep/{{iso}}.trim_only.rpt",
+        kept    = f"{WD}/{{iso}}/prep/{{iso}}.kept.fa",
+        trimmed = f"{WD}/{{iso}}/prep/{{iso}}.trimmed_ends.fa",
     conda: "envs/bioinf.yaml"
-    resources: mem_mb=4000, runtime=60
+    resources: mem_mb=8000, runtime=120
     shell:
         r"""
-        if [ -s {input.rmlist} ]; then seqkit grep -v -f {input.rmlist} {input.pri} -o {output.fa}
-        else cp {input.pri} {output.fa}; fi
+        # (1) drop the curated whole-contig EXCLUDEs
+        if [ -s {input.rmlist} ]; then seqkit grep -v -f {input.rmlist} {input.pri} -o {params.kept}
+        else cp {input.pri} {params.kept}; fi
+        # (2) TRIM ends only: TRIM-only action report (FIX/REVIEW/EXCLUDE excluded -> never masked)
+        grep -E '^#' {input.rpt} > {params.trim} || true
+        awk -F'\t' '!/^#/ && $5=="TRIM"' {input.rpt} >> {params.trim} || true
+        if [ "$(awk -F'\t' '!/^#/ && $5=="TRIM"' {input.rpt} | wc -l)" -gt 0 ]; then
+            cat {params.kept} | python3 {params.py} clean genome \
+                --action-report {params.trim} --output {output.fa} \
+                --contam-fasta-out {params.trimmed}
+            rm -f {params.kept}
+        else
+            mv {params.kept} {output.fa}
+        fi
         """
 
 # ===========================================================================
