@@ -14,7 +14,7 @@
 isolates: [MA, MM]
 threads: 32
 
-workdir: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_verification/final_ibd/fourhap/asm_build_v2
+workdir: /n/netscratch/informatics/Lab/tsackton/rotifer-assembly-20260723
 
 # ---- software is provisioned by Snakemake, NOT by paths --------------------
 # conda envs in envs/*.yaml (rule `conda:` directives) + the FCS-GX container.
@@ -71,19 +71,20 @@ barcode_len: 16                 # 10x Genomics GEM barcode length (chemistry-fix
 # so the ENTIRE downstream build + QC run on the decontaminated assembly.
 prep:
   cov_reads: ont                 # coverage source for the blob plot (the filtered ONT set)
-  # --- FCS-GX, FRESH run with a CURRENT db (original used db build 2023-01-24) ---
-  run_fcsgx: false               # set true to add a fresh FCS-GX pass (Snakemake pulls the
-                                 # container; rule fetch_gxdb syncs the db). blob screen runs regardless.
-  fcsgx_image: docker://ncbi/fcs-gx:0.5.5                # Snakemake pulls this (apptainer)
-  fcsgx_db_dir: /n/netscratch/informatics/Lab/tsackton/rotifer_tmp/gxdb   # fetch_gxdb syncs here (~470 GB; needs network)
-  fcsgx_manifest: https://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/FCS/database/latest/all.manifest
-  fcsgx_taxid: 104788            # M. quadricornifera (NCBI taxon 104788) -> anml:rotifers
-  # --- blobtools-style (DIY; blobtools not installed) ---
-  blob_gc_flag: 0.45             # GC above this -> BLAST + flag candidate (rotifer host ~0.30)
-  blob_windows_per_contig: 3
+  # --- FCS-GX, FRESH run with a CURRENT db, via the fcs.py wrapper + Singularity
+  #     (NCBI FCS-GX quickstart; same approach as dkhost's screen.slurm). The
+  #     rule fcsgx_tools curls fcs.py + fcs-gx.sif; fetch_gxdb runs `fcs.py db get`. ---
+  run_fcsgx: true                # false = skip FCS-GX (blobtools screen still runs); no db/container needed
+  fcsgx_tooldir:  /n/netscratch/informatics/Lab/tsackton/rotifer_tmp/fcsgx_tools
+  fcs_py_url:     https://github.com/ncbi/fcs/raw/main/dist/fcs.py
+  fcsgx_sif_url:  https://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/FCS/releases/latest/fcs-gx.sif
+  fcsgx_db_dir:   /n/netscratch/informatics/Lab/tsackton/rotifer_tmp/gxdb   # fetch_gxdb syncs here (~470 GB)
+  fcsgx_manifest: https://ncbi-fcs-gx.s3.amazonaws.com/gxdb/latest/all.manifest   # per the FCS-GX quickstart
+  fcsgx_taxid:    104788         # M. quadricornifera -> anml:rotifers (dkhost used 5962; both resolve to rotifers)
+  # --- blobtools-style taxonomy (blastn vs nt, DB-split scatter; see contam:) ---
+  blob_gc_flag: 0.45             # GC above this -> window + BLAST + flag candidate (rotifer host ~0.30)
+  blob_windows_per_contig: 20
   blob_window_bp: 2000
-  blob_run_blastx: false         # also blastx->nr on candidates (slower, protein-level)
-  # nt/nr dbs are reused from the `contam:` section below.
 
 # ============================================================================
 # PHASE A -- purge + scaffold
@@ -97,7 +98,7 @@ purge:
   # diploid cutoffs (valley 85). PROVENANCE: README.
   calcuts_opts:
     MA: ""
-    MM: "-l 25 -m 85 -u 180"
+    MM: ""
   get_seqs_opts: "-e"           # purge haplotypic dups only at contig ends (conservative)
 
 # ARKS kmer mode (arcs-make arks). PROVENANCE: values below must match the run
@@ -171,6 +172,11 @@ contam:
   run_blast: true               # windowed blastn->nt + blastx->nr taxonomy on flagged
   nt_db: /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt
   nr_db: /n/netscratch/informatics/Everyone/external_repos/blast/nr/latest/nr
+  # DB-split parallel blast (Phase-0 prep_report): nt has 334 volumes; search each
+  # group of this-many volumes against the full window set as a parallel job, then
+  # merge best hits (nt scanned once total). ~34 jobs/isolate at 10 vols/job.
+  nt_dbsize: 3980994145776       # total nt bases (blastdbcmd -info) -> per-volume e-values on full-nt scale
+  blast_volumes_per_job: 10
   windows_per_contig: 20
   window_bp: 2000
   drop_contigs: []              # SET after reviewing contam_report. CONFIRMED bacterial

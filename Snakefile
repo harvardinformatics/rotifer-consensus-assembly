@@ -18,7 +18,7 @@
 #         --default-resources slurm_account=informatics slurm_partition=sapphire <target>
 # All tunables live in config.yaml.
 # ============================================================================
-import os
+import os, glob
 
 configfile: "config.yaml"
 
@@ -26,6 +26,14 @@ ISO = config["isolates"]
 WD  = config["workdir"].rstrip("/")
 T   = config["threads"]
 SD  = os.path.join(workflow.basedir, "scripts")
+
+# nt ships as many volumes; the Phase-0 blast is parallelized by DB VOLUME (search
+# each volume-chunk against the full window set in parallel -> nt scanned once
+# total). Volumes are discovered at parse time from the nt db path.
+NTDIR     = os.path.dirname(config["contam"]["nt_db"])
+_NTVOLS   = sorted(f[:-4] for f in glob.glob(config["contam"]["nt_db"] + ".*.nin"))
+_VPJ      = config["contam"]["blast_volumes_per_job"]
+NT_CHUNKS = [_NTVOLS[i:i + _VPJ] for i in range(0, len(_NTVOLS), _VPJ)]
 
 wildcard_constraints:
     iso   = "|".join(ISO),
@@ -120,24 +128,41 @@ rule prep_cov:
         rm -f {params.d}/cov.bam {params.d}/cov.bam.bai
         """
 
-# FCS-GX GX database sync. Snakemake pulls the container; this rule fetches the
-# db. The db is large (~470 GB) and needs network -- run where there is internet
-# (login/transfer node); many clusters' compute nodes are offline.
-rule fetch_gxdb:
+# FCS-GX via the fcs.py wrapper + Singularity image -- the NCBI-documented
+# approach (FCS-GX quickstart) and what dkhost's screen.slurm used. fcs.py drives
+# the container itself, so NO Snakemake `container:` directive. Compute nodes have
+# internet here, so tool/db fetch run as ordinary jobs.
+rule fcsgx_tools:
+    output:
+        py  = config["prep"]["fcsgx_tooldir"].rstrip("/") + "/fcs.py",
+        sif = config["prep"]["fcsgx_tooldir"].rstrip("/") + "/fcs-gx.sif",
+    params: py_url = config["prep"]["fcs_py_url"], sif_url = config["prep"]["fcsgx_sif_url"]
+    resources: mem_mb=4000, runtime=120
+    shell:
+        r"""
+        mkdir -p $(dirname {output.py})
+        curl -Ls {params.py_url}  -o {output.py}
+        curl -Ls {params.sif_url} -o {output.sif}
+        """
+
+rule fetch_gxdb:   # fcs.py db get --mft <S3 manifest> --dir <gxdb>  (~470 GB, one-time)
+    input:  py = rules.fcsgx_tools.output.py, sif = rules.fcsgx_tools.output.sif
     output: touch(config["prep"]["fcsgx_db_dir"].rstrip("/") + "/.synced")
     params: db = config["prep"]["fcsgx_db_dir"], mft = config["prep"]["fcsgx_manifest"]
-    container: config["prep"]["fcsgx_image"]
-    resources: mem_mb=8000, runtime=1440
+    conda: "envs/bioinf.yaml"
+    resources: mem_mb=16000, runtime=1440
     shell:
         r"""
         mkdir -p {params.db}
-        sync_files.py get --mft "{params.mft}" --dir {params.db}    # VERIFY vs your FCS-GX version
+        FCS_DEFAULT_IMAGE={input.sif} python3 {input.py} db get --mft "{params.mft}" --dir {params.db}
         """
 
 def fcsgx_inputs(wc):
     d = {"pri": config["primary"][wc.iso]}
     if config["prep"]["run_fcsgx"]:
         d["gxdb"] = config["prep"]["fcsgx_db_dir"].rstrip("/") + "/.synced"
+        d["sif"]  = rules.fcsgx_tools.output.sif
+        d["py"]   = rules.fcsgx_tools.output.py
     return d
 
 # FRESH FCS-GX with a CURRENT db (the original report used a 2023-01-24 db).
@@ -147,8 +172,10 @@ rule prep_fcsgx:
     params:
         run = int(bool(config["prep"]["run_fcsgx"])),
         db = config["prep"]["fcsgx_db_dir"], taxid = config["prep"]["fcsgx_taxid"],
+        sif = config["prep"]["fcsgx_tooldir"].rstrip("/") + "/fcs-gx.sif",
+        py  = config["prep"]["fcsgx_tooldir"].rstrip("/") + "/fcs.py",
         d = f"{WD}/{{iso}}/prep/fcsgx",
-    container: config["prep"]["fcsgx_image"]
+    conda: "envs/bioinf.yaml"
     threads: T
     resources:   # FCS-GX loads the db to RAM (NCBI recommends ~512 GB); trivial when off
         mem_mb  = lambda wc: 512000 if config["prep"]["run_fcsgx"] else 2000,
@@ -157,56 +184,87 @@ rule prep_fcsgx:
         r"""
         mkdir -p {params.d}
         if [ "{params.run}" = "1" ]; then
-            run_gx.py --fasta {input.pri} --gx-db {params.db} --tax-id {params.taxid} \
-                      --out-basename {wildcards.iso} --output {params.d}   # VERIFY vs your FCS-GX version
-            cp {params.d}/*.fcs_gx_report.txt {output.rpt}
+            FCS_DEFAULT_IMAGE={params.sif} python3 {params.py} screen genome \
+                --fasta {input.pri} --out-dir {params.d} --gx-db {params.db} --tax-id {params.taxid}
+            cp {params.d}/*.{params.taxid}.fcs_gx_report.txt {output.rpt}
         else
             echo "#FCS-GX not run (prep.run_fcsgx=false)." > {output.rpt}
         fi
         """
 
-# combine GC + coverage + taxonomy (+ FCS-GX) -> candidate report + list + plots
-rule prep_report:
-    input:
-        pri = lambda wc: config["primary"][wc.iso],
-        cov = f"{WD}/{{iso}}/prep/cov.txt",
-        fcs = f"{WD}/{{iso}}/prep/fcsgx_report.txt",
+# Blobtools-style taxonomy. Window the GC-flagged contigs (prep_windows), then
+# blastn the SAME window set against each nt VOLUME-CHUNK in parallel (blast_chunk;
+# DB split, not query split -> nt scanned once total, spread across jobs), and
+# merge best hits (blast_merge). See README for why DB-split beats query-batching.
+rule prep_windows:
+    input:  pri = lambda wc: config["primary"][wc.iso]
     output:
-        report = f"{WD}/{{iso}}/prep/{{iso}}.contam_report.tsv",
-        cand   = f"{WD}/{{iso}}/prep/{{iso}}.remove_candidates.txt",
-        blob   = f"{WD}/{{iso}}/prep/{{iso}}.blob.png",
+        gc  = f"{WD}/{{iso}}/prep/gc.tsv",
+        win = f"{WD}/{{iso}}/prep/win.fa",
     params:
         d = f"{WD}/{{iso}}/prep", gcflag = config["prep"]["blob_gc_flag"],
         nwin = config["prep"]["blob_windows_per_contig"], wbp = config["prep"]["blob_window_bp"],
-        nt = config["contam"]["nt_db"], nr = config["contam"]["nr_db"],
-        do_blastx = int(bool(config["prep"]["blob_run_blastx"])),
-    conda: "envs/blast.yaml"
-    threads: T
-    resources: mem_mb=32000, runtime=720
+    conda: "envs/bioinf.yaml"
+    threads: 8
+    resources: mem_mb=8000, runtime=120
     shell:
         r"""
         mkdir -p {params.d}
         samtools faidx {input.pri}
-        seqkit fx2tab -j {threads} -n -l -g {input.pri} > {params.d}/gc.tsv    # name length GC%
-        awk -v G={params.gcflag} '$3/100 > G {{print $1}}' {params.d}/gc.tsv > {params.d}/blast_targets.txt
+        seqkit fx2tab -j {threads} -n -l -g {input.pri} > {output.gc}    # name length GC%
+        awk -v G={params.gcflag} '$3/100 > G {{print $1}}' {output.gc} > {params.d}/blast_targets.txt
         : > {params.d}/regions.txt
         while read c; do
             L=$(awk -v c="$c" '$1==c{{print $2}}' {input.pri}.fai)
             python {SD}/make_windows.py "$c" "$L" {params.nwin} {params.wbp} >> {params.d}/regions.txt
         done < {params.d}/blast_targets.txt
+        if [ -s {params.d}/regions.txt ]; then samtools faidx -r {params.d}/regions.txt {input.pri} > {output.win}
+        else : > {output.win}; fi
+        """
+
+rule blast_chunk:   # one nt volume-chunk; -dbsize keeps per-volume e-values on the full-nt scale
+    input:  win = f"{WD}/{{iso}}/prep/win.fa"
+    output: tsv = f"{WD}/{{iso}}/prep/blast/chunk_{{c}}.tsv"
+    params:
+        vols = lambda wc: " ".join(NT_CHUNKS[int(wc.c)]),
+        ntdir = NTDIR, dbsize = config["contam"]["nt_dbsize"],
+    conda: "envs/blast.yaml"
+    threads: 8
+    resources: mem_mb=16000, runtime=240
+    shell:
+        r"""
+        mkdir -p $(dirname {output.tsv})
         FMT="6 qseqid pident length evalue bitscore staxids sscinames sblastnames sskingdoms stitle"
-        rm -f {params.d}/blastn.tsv {params.d}/blastx.tsv
-        if [ -s {params.d}/regions.txt ]; then
-            samtools faidx -r {params.d}/regions.txt {input.pri} > {params.d}/win.fa
-            BLASTDB={params.nt} blastn -task megablast -db {params.nt} -query {params.d}/win.fa \
-                -num_threads {threads} -max_target_seqs 5 -evalue 1e-10 -outfmt "$FMT" > {params.d}/blastn.tsv || true
-            if [ "{params.do_blastx}" = "1" ]; then
-                BLASTDB={params.nr} blastx -db {params.nr} -query {params.d}/win.fa \
-                    -num_threads {threads} -max_target_seqs 5 -evalue 1e-5 -outfmt "$FMT" > {params.d}/blastx.tsv || true
-            fi
-        fi
-        python {SD}/blob_report.py --gc {params.d}/gc.tsv --cov {input.cov} --fcsgx {input.fcs} \
-            --blastn {params.d}/blastn.tsv --gcflag {params.gcflag} \
+        if [ -s {input.win} ]; then
+            BLASTDB={params.ntdir} blastn -task megablast -db "{params.vols}" -query {input.win} \
+                -dbsize {params.dbsize} -num_threads {threads} -max_target_seqs 5 -evalue 1e-10 \
+                -outfmt "$FMT" > {output.tsv}
+        else : > {output.tsv}; fi
+        """
+
+rule blast_merge:   # gather chunks; sort so the best (max-bitscore) hit is first per window
+    input: lambda wc: expand(f"{WD}/{wc.iso}/prep/blast/chunk_{{c}}.tsv", c=range(len(NT_CHUNKS)))
+    output: tsv = f"{WD}/{{iso}}/prep/blastn.tsv"
+    resources: mem_mb=8000, runtime=60
+    shell: "cat {input} | sort -t$'\t' -k1,1 -k5,5nr > {output.tsv}"
+
+rule prep_report:   # combine GC + coverage + taxonomy (+ FCS-GX) -> report + candidates + plots
+    input:
+        gc     = f"{WD}/{{iso}}/prep/gc.tsv",
+        cov    = f"{WD}/{{iso}}/prep/cov.txt",
+        fcs    = f"{WD}/{{iso}}/prep/fcsgx_report.txt",
+        blastn = f"{WD}/{{iso}}/prep/blastn.tsv",
+    output:
+        report = f"{WD}/{{iso}}/prep/{{iso}}.contam_report.tsv",
+        cand   = f"{WD}/{{iso}}/prep/{{iso}}.remove_candidates.txt",
+        blob   = f"{WD}/{{iso}}/prep/{{iso}}.blob.png",
+    params: d = f"{WD}/{{iso}}/prep", gcflag = config["prep"]["blob_gc_flag"]
+    conda: "envs/blast.yaml"
+    resources: mem_mb=16000, runtime=120
+    shell:
+        r"""
+        python {SD}/blob_report.py --gc {input.gc} --cov {input.cov} --fcsgx {input.fcs} \
+            --blastn {input.blastn} --gcflag {params.gcflag} \
             --report {output.report} --candidates {output.cand} --plotprefix {params.d}/{wildcards.iso}
         """
 

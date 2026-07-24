@@ -42,8 +42,9 @@ flowchart TD
 ```bash
 cd rotifer-assembly/autobuild
 snakemake -n --sw-deployment-method conda      # dry run / sanity
-# software: conda envs (envs/*.yaml). Add `apptainer` ONLY when running FCS-GX
-# (prep.run_fcsgx: true) so the container is pulled only when actually needed:
+# software: conda envs (envs/*.yaml) via --sdm conda. FCS-GX runs through its own
+# fcs.py wrapper + Singularity (needs `singularity` on PATH; /usr/bin/singularity on
+# Cannon) -- no Snakemake container deployment needed.
 SLURM="--sw-deployment-method conda --executor slurm -j 200 \
        --default-resources slurm_account=informatics slurm_partition=sapphire"
 
@@ -79,11 +80,12 @@ of every manual decision.
 | `ont_reads.*` | `source-data/ont-2024-filt/{MA,MM}.ont.filt10k.fastq.gz` | **finalized ≥10 kb ONT** (both 2024 runs pooled per isolate); consumed directly, not re-filtered. Full provenance (source runs, 10 kb = recovered dkhost `FILT` threshold, exact command) in that directory's `README.md` |
 | `tenx_R1/R2.*` | 4228-MM-0004 (MA), 0005 (MM), lanes L002+L003 | isolate ID resolved by mapping 10x R2 to hap1 (0.66% vs 1.99% cross); 0006 is a 3rd sample, unused |
 | `barcode_len` | 16 | 10x Genomics GEM barcode (chemistry-fixed) |
-| `prep.run_fcsgx` | false | fresh FCS-GX needs a current GX db + container, **not present on Cannon** (original report was dkhost's, db 2023-01-24). Provision, then set true |
-| `prep.fcsgx_taxid` | 104788 | *M. quadricornifera* NCBI taxon → division `anml:rotifers` |
-| `prep.blob_gc_flag` | 0.45 | GC above this → BLAST + flag candidate. Rotifer host ~0.30; confirmed contaminants 0.66–0.72 |
-| `prep.blob_windows_per_contig` / `blob_window_bp` | 3 / 2000 | sampling for per-contig taxonomy on GC-flagged contigs |
-| `prep.blob_run_blastx` | false | optional blastx→nr (protein) confirmation; slow |
+| `prep.run_fcsgx` | true | fresh FCS-GX via the `fcs.py` wrapper; `fcsgx_tools` curls `fcs.py`+`fcs-gx.sif`, `fetch_gxdb` syncs the current GX db (~470 GB). false = skip (blob screen still runs) |
+| `prep.fcsgx_taxid` | 104788 | *M. quadricornifera* NCBI taxon → division `anml:rotifers` (dkhost used 5962; both resolve to rotifers) |
+| `prep.fcsgx_manifest` | S3 `…/gxdb/latest/all.manifest` | GX db manifest per the FCS-GX quickstart |
+| `prep.blob_gc_flag` | 0.45 | GC above this → window + BLAST + flag candidate. Rotifer host ~0.30; confirmed contaminants 0.66–0.72 |
+| `prep.blob_windows_per_contig` / `blob_window_bp` | 20 / 2000 | per-contig taxonomy sampling (parallelized by DB-split, so 20 is fine) |
+| `contam.blast_volumes_per_job` / `nt_dbsize` | 10 / 3.98e12 | Phase-0 blast is split across nt's 334 volumes (10/job → ~34 jobs/isolate); `-dbsize` keeps e-values on the full-nt scale |
 | `purge.calcuts_opts.MM` | `-l 25 -m 85 -u 180` | MM ONT depth is bimodal (~58×/116×); `calcuts` auto-calls it haploid → manual diploid cutoffs (valley 85). `-d 0` does NOT override. MA auto-detects fine (`""`) |
 | `purge.get_seqs_opts` | `-e` | purge haplotypic dups only at contig ends (conservative; purge_dups standard) |
 | `purge.self_preset/flags` | `asm5 -DP` | purge_dups self-alignment standard |
@@ -108,17 +110,18 @@ per-contig GC (`fx2tab`) and summary stats (`stats -a`), and selects/drops conti
 (`grep -v -f`) — replacing the old `fasta_select.py`/`asm_stats.py`/`filt_len.sh`. (ONT
 read filtering is now an upstream step; the pipeline consumes the finalized reads.)
 
-**Phase 0:** `prep_cov` (minimap2+samtools) · `prep_fcsgx` (FCS-GX container; gated) · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (`seqkit grep -v`).
+**Phase 0:** `prep_cov` (minimap2+samtools) · `fcsgx_tools`+`fetch_gxdb`+`prep_fcsgx` (`fcs.py` wrapper + Singularity) · `prep_windows` → `blast_chunk` (scatter over nt volume-chunks) → `blast_merge` · `prep_report`→`blob_report.py` (GC+coverage+BLAST+FCS-GX → report/candidates/blob+hist plots) · `prep_reference` (`seqkit grep -v`).
 **Phases A–C:** `prep_10x` (awk BX-tag) · `purge_dups`/`scaffold_arks` (purge_dups + arcs-make) · `split_cuts`→`apply_cuts.py` · `map_ont`+`join_qc`→`join_qc.py` · `synteny`→`paf_dotplot.py`+`synteny_classify.py` (isolate-prefixed) · `build_consensus`→`build_consensus.py` · `contam_screen`→`make_windows.py`+blast+`contam_report.py` · `finalize_ref` (`seqkit grep -v`) · `qc_coverage`→`cov_qc.py` · `asm_stats` (`seqkit stats -a`) · `qc_merqury` (meryl+merqury.sh) · `qc_kmer_completeness`→`kmer_completeness.py`. Kept in-house scripts are the ones with no standard-tool equivalent (custom QC/plot/merge logic).
 
 ## Requirements / caveats
 
-- **Software = Snakemake-managed, not paths.** Each rule declares `conda: envs/*.yaml` (`bioinf` minimap2/samtools/seqkit/pysam/matplotlib; `purge_dups`; `arcs`+links; `merqury`+meryl; `blast`) and FCS-GX rules declare the `container:`. Run with `--sw-deployment-method conda apptainer`. The pinned env YAMLs are the version record. Adjust pins if a version fails to solve.
+- **Software = Snakemake-managed, not paths.** Each rule declares `conda: envs/*.yaml` (`bioinf` minimap2/samtools/seqkit/pysam/matplotlib; `purge_dups`; `arcs`+links; `merqury`+meryl; `blast`); run with `--sdm conda`. FCS-GX is the exception — it uses the `fcs.py` wrapper + Singularity directly (`singularity` on PATH), not a Snakemake-managed container. The pinned env YAMLs are the version record; adjust pins if a version fails to solve.
 - **Intermediates are `temp()`** — the barcoded 10x fastq and QC BAMs delete after their consumer; purge_dups/coverage BAMs and paf.gz are removed in-rule. The filtered ONT sets are kept (reused across phases).
 - **`prep_10x` is the least-validated step** — the BX-tagging awk assumes a 16 bp R1 prefix barcode with no whitelist correction. **Reconcile against how the accepted scaffolds were actually built before trusting a fresh scaffold.**
 - **ARKS output name** is parameter-dependent; `scaffold_arks` requires exactly one file matching `arks.output_glob` and fails loudly otherwise (keeps the run deterministic).
 - **`contam.run_blast: true`** does a windowed nt+nr BLAST on GC-flagged contigs — hours on a shared node; set `false` to rely on GC alone.
 - Merqury runs **per isolate on its own cut assembly** (not the merged ref) to avoid the cross-isolate confound; interpret QV/completeness with the k-mer-completeness stratification (a purged haploid necessarily "misses" the alternate heterozygous allele).
 - **Decontamination is now in-workflow (Phase 0)**, because the upstream FCS-GX (db 2023-01-24) under-detected — it left ~65 Mb of high-GC contigs in MM including 5 circular complete bacterial genomes (`ptg000065c` Reyranella, `ptg000035c` Variovorax @100%, `036c/094c/067c`). Phase 0 re-screens the primaries and removes the verified set before anything else runs; the end-of-pipeline `contam_screen` is a second-line net on the final reference.
-- **`prep_fcsgx` (fresh FCS-GX):** Snakemake pulls the `docker://ncbi/fcs-gx` container and `fetch_gxdb` syncs the current GX db (~470 GB, needs network — run the fetch where there's internet). Off by default (`prep.run_fcsgx: false`); the blobtools-style GC+coverage+BLAST screen runs regardless and cleanly separates the high-GC contaminants from the ~30%-GC host. The exact in-container `run_gx.py`/`sync_files.py` invocations are marked `VERIFY` in the Snakefile — confirm against the pulled image version before enabling.
+- **FCS-GX (fresh) uses the NCBI-documented `fcs.py` route** (matches dkhost's `screen.slurm`): `fcsgx_tools` curls `fcs.py` + `fcs-gx.sif`, `fetch_gxdb` runs `fcs.py db get` (~470 GB → netscratch), `prep_fcsgx` runs `fcs.py screen genome` with `FCS_DEFAULT_IMAGE=fcs-gx.sif`. Needs `singularity` on PATH and a ~512 GB node (sapphire ~990 GB is fine; else `slurm_partition=bigmem`). `run_fcsgx: false` skips it (blob screen still runs; no db/container needed).
+- **Phase-0 taxonomy BLAST is split by database, not query.** `blastn` vs nt is dominated by scanning the whole db, so batching the *query* just re-scans nt per batch; instead `blast_chunk` searches the full window set against each of nt's 334 volumes in parallel (`blast_volumes_per_job` per job) and `blast_merge` keeps the best hit per window — nt is scanned once total, spread across ~34 jobs/isolate.
 - **`blob_report.py` is a DIY blobtools** (the real blobtools isn't installed): GC vs ONT-coverage scatter (sized by length, colored host/candidate/contaminant) + GC/coverage histograms, with candidates flagged by FCS-GX ∪ high-GC ∪ non-metazoan BLAST.
