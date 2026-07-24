@@ -25,10 +25,11 @@ workdir: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/switch_ver
 # INPUTS
 # ============================================================================
 # 1. primary assemblies -- hifiasm --ont primary contigs, FCS-GX + FCS-adaptor
-#    screened upstream (provenance: eosipova clean_assemblies_no_adap; see README).
+#    screened. Provenance chain + caveats in assemblies-clean/README.md. NB these
+#    still carry residual bacterial contamination that Phase 0 removes.
 primary:
-  MA: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MA.clean_no_adap.p_ctg.fa
-  MM: /n/holylfs05/LABS/informatics/Lab/projects/eosipova/Rotifers/clean_assemblies_no_adap/MM.clean_no_adap.p_ctg.fa
+  MA: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/assemblies-clean/MA.clean_no_adap.p_ctg.fa
+  MM: /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/assemblies-clean/MM.clean_no_adap.p_ctg.fa
 
 # 2. ONT reads -- FINALIZED length-filtered (>=10 kb) sets, both runs pooled per
 #    isolate. Made upstream; the pipeline consumes these directly (does NOT re-filter).
