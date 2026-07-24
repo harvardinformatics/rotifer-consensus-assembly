@@ -42,15 +42,15 @@ ont_reads:
 #    Isolate identity RESOLVED: 4228-MM-0004 = MA, 4228-MM-0005 = MM (0006 = 3rd
 #    sample, unused). R1 carries a 16 bp barcode at bp 1-16.
 tenx_R1:
-  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L002_R1_001.fastq.gz,
-       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L003_R1_001.fastq.gz]
-  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L002_R1_001.fastq.gz,
-       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L003_R1_001.fastq.gz]
+  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0004_S2_L002_R1_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0004_S2_L003_R1_001.fastq.gz]
+  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0005_S3_L002_R1_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0005_S3_L003_R1_001.fastq.gz]
 tenx_R2:
-  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L002_R2_001.fastq.gz,
-       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0004_S2_L003_R2_001.fastq.gz]
-  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L002_R2_001.fastq.gz,
-       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/ONT_published/4228-MM-0005_S3_L003_R2_001.fastq.gz]
+  MA: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0004_S2_L002_R2_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0004_S2_L003_R2_001.fastq.gz]
+  MM: [/n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0005_S3_L002_R2_001.fastq.gz,
+       /n/holylfs05/LABS/informatics/Lab/projects/tsackton/rotifers/assembly-build-20260723/source-data/laine-et-al-seq/4228-MM-0005_S3_L003_R2_001.fastq.gz]
 barcode_len: 16                 # 10x Genomics GEM barcode length (chemistry-fixed)
 
 # ============================================================================
