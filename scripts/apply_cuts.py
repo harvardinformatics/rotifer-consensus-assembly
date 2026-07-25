@@ -43,10 +43,11 @@ def snap_to_gap(seq, pos, snap):
 
 with open(outfa, 'w') as o:
     for name, seq in read_fa(infa):
-        if name not in cuts:
-            o.write(f">{name}\n{seq}\n"); continue
-        pts = sorted(set(min(max(1, snap_to_gap(seq, p, SNAP)), len(seq) - 1) for p in cuts[name]))
+        short = name.split(",")[0]      # cuts.tsv / cut_sites use the short id (before the comma)
+        if short not in cuts:
+            o.write(f">{short}\n{seq}\n"); continue
+        pts = sorted(set(min(max(1, snap_to_gap(seq, p, SNAP)), len(seq) - 1) for p in cuts[short]))
         bounds = [0] + pts + [len(seq)]
         for i in range(len(bounds) - 1):
-            o.write(f">{name}_p{i+1}\n{seq[bounds[i]:bounds[i+1]]}\n")
-        sys.stderr.write(f"{name}: cut into {len(bounds)-1} at {[round(p/1e6,2) for p in pts]} Mb\n")
+            o.write(f">{short}_p{i+1}\n{seq[bounds[i]:bounds[i+1]]}\n")
+        sys.stderr.write(f"{short}: cut into {len(bounds)-1} at {[round(p/1e6,2) for p in pts]} Mb\n")
