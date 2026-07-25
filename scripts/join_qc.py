@@ -9,7 +9,7 @@ unexpectedly low spanning (a join the scaffolder didn't mark with an N-gap).
 Usage: join_qc.py assembly.fa reads.bam [min_scaffold_mb=10] [flank_bp=3000] [min_span=5]
 Requires pysam. BAM must be coordinate-sorted + indexed.
 """
-import sys, re
+import sys, re, os
 import pysam
 
 fa, bam = sys.argv[1], sys.argv[2]
@@ -38,6 +38,10 @@ def spanning(bf, ctg, pos, flank=FLANK):
             n += 1
     return n
 
+# fetch()/count() need a .bai; map_ont's index is temp() and may be gone -> self-index.
+if not (os.path.exists(bam + ".bai") or os.path.exists(re.sub(r"\.bam$", ".bai", bam))):
+    sys.stderr.write("join_qc: no BAM index found -> pysam.index(bam)\n")
+    pysam.index(bam)
 bf = pysam.AlignmentFile(bam)
 seqs = dict(read_fa(fa))
 print(f"### ONT join QC (scaffolds >= {MINSCAF/1e6:.0f} Mb) ; span +/-{FLANK} bp ; min_span={MINSPAN} ###")
