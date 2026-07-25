@@ -120,15 +120,20 @@ arks:
 # for a from-scratch run, populate after inspecting Phase-A QC. Values below are
 # the 2026-07-22 draft decisions (record; RE-DERIVE for the final run).
 cut_snap_bp: 20000
+# cut_sites RE-DERIVED for the 2026-07-25 build from phaseB join_qc + MA x MM synteny.
+# Rule: cut a scaffold gap only where the synteny partner SWITCHES (chromosome boundary)
+# AND ONT reads do not span it. Full per-cut rationale: results/phaseB/cut-evidence.md.
 cut_sites:
   MA:
-    - {scaffold: scaffold1, pos_mb: 31.1}
-    - {scaffold: scaffold1, pos_mb: 64.1}
-    - {scaffold: scaffold2, pos_mb: 32.1}
+    - {scaffold: scaffold1, pos_mb: 1.49}    # MMs3|MMs1 span0  -- trim 1.5Mb head
+    - {scaffold: scaffold1, pos_mb: 31.11}   # MMs1|MMs4 span0  -- major arm boundary
+    - {scaffold: scaffold1, pos_mb: 84.10}   # MMs4|MMs2 span0  -- trim 2.2Mb tail
+    - {scaffold: scaffold2, pos_mb: 0.70}    # MMs3|MMs2 span0  -- trim 0.7Mb head
+    - {scaffold: scaffold6, pos_mb: 11.45}   # MMs3|MMs2 span0
   MM:
-    - {scaffold: scaffold4, pos_mb: 47.1}
-    - {scaffold: scaffold1, pos_mb: 24.9}
-    - {scaffold: scaffold2, pos_mb: 28.3}
+    - {scaffold: scaffold1, pos_mb: 55.84}   # MAs3|MAs1 span7  -- marginal, included per review
+    - {scaffold: scaffold1, pos_mb: 110.99}  # MAs1|MAs4 span3  -- trim 1.1Mb tail
+    - {scaffold: scaffold2, pos_mb: 46.90}   # MAs1|MAs2 span0  -- major arm boundary
 
 # ---- cross-isolate synteny (used in BOTH phase A on scaffolds and B on cuts) --
 synteny:
