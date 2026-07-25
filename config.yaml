@@ -108,7 +108,7 @@ purge:
 # ARKS kmer mode (arcs-make arks). PROVENANCE: values below must match the run
 # that produced the accepted scaffolds -- VERIFY against SLURM logs (README).
 arks:
-  output_glob: "draft*_scaffolds.fa"   # ARKS names output by params; pinned via README note
+  output_glob: "draft*.scaffolds.fa"   # arcs-make writes <draft>_<params>.scaffolds.fa (DOT before scaffolds, not _)
   params: "c=5 m=50-10000 s=98 z=500 l=4 a=0.7 k=30"
 
 # ============================================================================
