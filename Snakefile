@@ -96,19 +96,19 @@ rule prep_10x:
     output: bx = temp(f"{WD}/{{iso}}/scaffold/reads.bx.fq.gz")
     params: bl = config["barcode_len"]
     conda: "envs/bioinf.yaml"
-    threads: 4
-    resources: mem_mb=8000, runtime=300
+    threads: 16
+    resources: mem_mb=8000, runtime=720   # pigz-parallel; single-thread gzip timed out at 5h
     shell:
         r"""
         mkdir -p $(dirname {output.bx})
-        paste <(zcat {input.r1} | paste - - - -) <(zcat {input.r2} | paste - - - -) \
+        paste <(pigz -dc {input.r1} | paste - - - -) <(pigz -dc {input.r2} | paste - - - -) \
         | awk -F'\t' -v BL={params.bl} 'BEGIN{{OFS="\n"}} {{
               bx=substr($2,1,BL);
               h1=$1; sub(/^@/,"",h1); sub(/ .*/,"",h1);
               h2=$5; sub(/^@/,"",h2); sub(/ .*/,"",h2);
               print "@"h1" BX:Z:"bx"-1", substr($2,BL+1), "+", substr($4,BL+1);
               print "@"h2" BX:Z:"bx"-1", $6, "+", $8;
-          }}' | gzip -c > {output.bx}
+          }}' | pigz -p {threads} -c > {output.bx}
         """
 
 # ===========================================================================
