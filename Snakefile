@@ -494,7 +494,7 @@ rule meryl_hist:                      # 10x R2 k-mer histogram for GenomeScope2
     input: r2 = lambda wc: config["tenx_R2"][wc.iso]
     output: hist = f"{WD}/{{iso}}/purge_qc/{{iso}}.k{MK}.hist"
     params: k = MK, mem_gb = 60, d = f"{WD}/{{iso}}/purge_qc/{{iso}}.k{MK}.meryl"
-    conda: "envs/merqury.yaml"
+    conda: "envs/meryl.yaml"
     threads: T
     resources: mem_mb=64000, runtime=480
     shell:

@@ -1,0 +1,6 @@
+name: autobuild-meryl
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - meryl=1.4.1
