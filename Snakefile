@@ -456,21 +456,24 @@ rule synteny:
         ma = f"{WD}/MA/{{stage}}/MA.{{stage}}.fa",
         mm = f"{WD}/MM/{{stage}}/MM.{{stage}}.fa",
     output:
-        paf = f"{WD}/synteny_{{stage}}/MAxMM.paf",
-        png = f"{WD}/synteny_{{stage}}/MAxMM_dotplot.png",
-        tsv = f"{WD}/synteny_{{stage}}/correspondence.tsv",
+        paf   = f"{WD}/synteny_{{stage}}/MAxMM.paf",
+        png   = f"{WD}/synteny_{{stage}}/MAxMM_dotplot.png",
+        tsv   = f"{WD}/synteny_{{stage}}/correspondence.tsv",
+        edges = f"{WD}/synteny_{{stage}}/edges.tsv",       # per-homolog aln_bp + real %id
     params:
         preset = config["synteny"]["preset"], minaln = config["synteny"]["min_aln_bp"],
-        minlen = config["synteny"]["dotplot_min_len_bp"],
+        minlen = config["synteny"]["dotplot_min_len_bp"], minid = config["synteny"]["min_id"],
     conda: "envs/bioinf.yaml"
     threads: T
-    resources: mem_mb=32000, runtime=300
+    resources: mem_mb=64000, runtime=300
     shell:
         r"""
         mkdir -p $(dirname {output.paf})
-        minimap2 -x {params.preset} -t {threads} {input.ma} {input.mm} > {output.paf} 2>{output.paf}.log
+        # BASE-LEVEL alignment (-c --cs) so the PAF carries de:f: (gap-compressed divergence)
+        # -> real %id, not the chaining estimate. Order is `minimap2 MM MA` so query=MA (=X axis).
+        minimap2 -cx {params.preset} --cs -t {threads} {input.mm} {input.ma} > {output.paf} 2>{output.paf}.log
         python {SD}/paf_dotplot.py {output.paf} {output.png} {params.minlen}
-        python {SD}/synteny_classify.py {output.paf} {output.tsv} {params.minaln}
+        python {SD}/synteny_classify.py {output.paf} {output.tsv} {output.edges} {params.minaln} {params.minid}
         """
 
 # ===========================================================================

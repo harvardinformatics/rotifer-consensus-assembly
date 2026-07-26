@@ -137,8 +137,11 @@ cut_sites:
 
 # ---- cross-isolate synteny (used in BOTH phase A on scaffolds and B on cuts) --
 synteny:
-  preset: asm5                  # MA vs MM ~2% (allelic) -> asm5; asm20 for ohnolog scale
+  preset: asm5                  # MA vs MM orthologs validated ~98.5% id (~1.5% divergent) -> asm5
   min_aln_bp: 1000000           # min shared aligned bp to draw a correspondence edge
+  min_id: 0.90                  # min gap-compressed %id (from de:f:) for an ORTHOLOG edge.
+                                #   below = diverged paralog/ohnolog: kept in edges.tsv but
+                                #   excluded from correspondence grouping (orthologs ~98.5%).
   dotplot_min_len_bp: 20000     # min alignment length to plot
 
 # ============================================================================
