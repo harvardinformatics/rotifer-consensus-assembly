@@ -406,11 +406,22 @@ rule compleasm_db:                    # one-time lineage download (compute nodes
     resources: mem_mb=8000, runtime=180
     shell:
         r"""
+        # compleasm 0.2.6 is broken against the CURRENT ezlab data two ways, both inside
+        # Downloader -- whose __init__ runs UNCONDITIONALLY, including from `compleasm run`:
+        #   (a) download_placement() parses names via `strain.split(".")` expecting 3 (or 4)
+        #       fields, but names like 'x_odb10.DATE.tar.gz' now split into more -> ValueError.
+        #       Patch the split to a bounded maxsplit (fixes the download AND .done-skip branch).
+        #   (b) the placement-file URLs now 404. Placement files are only for --autolineage (we
+        #       pass -l explicitly), so touch placement_files.done to force the no-download branch.
+        # Together (+ clearing any stale .tmp lock) both `download` AND `run` succeed. (2026-07-26)
+        CP=$(ls $CONDA_PREFIX/lib/python*/site-packages/compleasm.py 2>/dev/null | head -1 || true)
+        if [ -n "$CP" ]; then
+          sed -i \
+            -e 's/prefix, version, sufix = strain\.split("\.")/prefix, version, sufix = strain.split(".", 2)/g' \
+            -e 's/prefix, aln, version, sufix = strain\.split("\.")/prefix, aln, version, sufix = strain.split(".", 3)/g' \
+            "$CP"
+        fi
         mkdir -p {params.lib}/placement_files
-        # compleasm 0.2.6 Downloader.download_placement() crashes parsing the current ezlab
-        # file_versions.tsv (strain.split(".") -> >3 parts). Placement files are only used for
-        # --autolineage; we pass -l explicitly. Pre-create the .done marker + clear any stale
-        # .tmp lock to skip that buggy path in BOTH `download` and `run`.
         rm -f {params.lib}/placement_files.tmp
         touch {params.lib}/placement_files.done
         compleasm download {params.dl} --library_path {params.lib}
