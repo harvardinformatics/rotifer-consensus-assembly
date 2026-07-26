@@ -3,5 +3,10 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
-  - python=3.10          # MUST pin: unpinned solved to py3.6 -> compleasm argparse crash
+  # compleasm 0.2.6 hard-requires sepp -> pasta/dendropy/hmmer chain. That chain
+  # only co-solves on specific pythons: unpinned falls to py3.6 (compleasm's own
+  # argparse then crashes), and py3.10 is unsatisfiable (no pasta 3.10 build).
+  # py3.9 has a complete sepp 4.4.0 / pasta 1.9.x / dendropy 4.5.1 stack AND is
+  # >=3.7 so compleasm runs. See envbuild solver traces 2026-07-26.
+  - python=3.9
   - compleasm=0.2.6
