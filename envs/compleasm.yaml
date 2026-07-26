@@ -3,4 +3,5 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
+  - python=3.10          # MUST pin: unpinned solved to py3.6 -> compleasm argparse crash
   - compleasm=0.2.6
