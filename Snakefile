@@ -27,6 +27,17 @@ WD  = config["workdir"].rstrip("/")
 T   = config["threads"]
 SD  = os.path.join(workflow.basedir, "scripts")
 
+# ---- post-purge QC (phaseA_qc) constants -----------------------------------
+CMPL_LIN = config["purge_qc"]["compleasm_lineage"]           # e.g. metazoa_odb10 (compleasm run -l)
+CMPL_DL  = CMPL_LIN.replace("_odb10", "")                    # e.g. metazoa (compleasm download)
+CMPL_LIB = config["purge_qc"]["compleasm_libdir"].rstrip("/")
+MK       = config["purge_qc"]["meryl_k"]
+
+def purgeqc_fa(iso, which):
+    return {"prepped": f"{WD}/{iso}/prep/{iso}.prepped.fa",
+            "purged":  f"{WD}/{iso}/purge/{iso}.purged.fa",
+            "hap":     f"{WD}/{iso}/purge/hap.fa"}[which]
+
 # nt ships as many volumes; the Phase-0 blast is parallelized by DB VOLUME (search
 # each volume-chunk against the full window set in parallel -> nt scanned once
 # total). Volumes are discovered at parse time from the nt db path.
@@ -38,6 +49,8 @@ NT_CHUNKS = [_NTVOLS[i:i + _VPJ] for i in range(0, len(_NTVOLS), _VPJ)]
 wildcard_constraints:
     iso   = "|".join(ISO),
     stage = "scaffold|cut",
+    which = "prepped|purged|hap",
+    reads = "ont|tenx",
 
 localrules: write_cuts, write_consensus_spec
 
@@ -57,6 +70,11 @@ rule phaseA:   # decontam + purge_dups, then STOP -- review the purge before hea
     input:
         expand(f"{WD}/{{iso}}/purge/{{iso}}.purge_stats.txt", iso=ISO),
         expand(f"{WD}/{{iso}}/purge/{{iso}}.purge_hist.png",  iso=ISO),
+
+rule phaseA_qc:   # post-purge VALIDATION -- is hap.fa really redundant haplotypic seq?
+    input:
+        expand(f"{WD}/{{iso}}/purge_qc/{{iso}}.purge_validation.txt", iso=ISO),
+        expand(f"{WD}/{{iso}}/purge_qc/{{iso}}.purge_validation.png", iso=ISO),
 
 rule phaseB:   # ARKS scaffold + scaffold QC + cross-isolate synteny
     input:
@@ -127,10 +145,10 @@ rule prep_cov:
         r"""
         mkdir -p {params.d}
         minimap2 -ax {params.pre} -t {threads} {input.pri} {input.ont} 2>{params.d}/cov.mm.log \
-          | samtools sort -@8 -m3G -o {params.d}/cov.bam -
-        samtools index {params.d}/cov.bam
-        samtools coverage {params.d}/cov.bam > {output.cov}
-        rm -f {params.d}/cov.bam {params.d}/cov.bam.bai
+          | samtools sort -@8 -m3G -o {params.d}/{wildcards.iso}.primary.ont.bam -
+        samtools index {params.d}/{wildcards.iso}.primary.ont.bam
+        samtools coverage {params.d}/{wildcards.iso}.primary.ont.bam > {output.cov}
+        # BAM kept (was rm -f'd) -- ONT vs raw primary, useful for inspection
         """
 
 # FCS-GX via the fcs.py wrapper + Singularity image -- the NCBI-documented
@@ -323,6 +341,7 @@ rule purge_dups:
         ont = lambda wc: config["ont_reads"][wc.iso],
     output:
         purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa",
+        hap    = f"{WD}/{{iso}}/purge/hap.fa",      # REMOVED haplotigs -- tracked & kept for phaseA_qc
         stat   = f"{WD}/{{iso}}/purge/PB.stat",     # depth histogram (for purge_qc review)
         cuts   = f"{WD}/{{iso}}/purge/cutoffs",     # calcuts thresholds actually used
     params:
@@ -370,6 +389,174 @@ rule purge_qc:
         seqkit stats -aT {input.prepped} {input.purged} >> {output.stats}
         python {SD}/purge_hist.py --stat {input.stat} --cuts {input.cuts} \
             --title "{wildcards.iso} purge_dups ONT depth" --out {output.hist}
+        """
+
+# ===========================================================================
+# PHASE A QC: is the purge VALID?  (target: phaseA_qc)
+# Three independent lines of evidence that hap.fa is redundant haplotypic seq:
+#   (1) compleasm markers on prepped/purged/hap  (over- & under-purge)
+#   (2) hap->purged alignment                    (does each removed contig map back?)
+#   (3) coverage on the combined purged+hap ref, ONT AND 10x independently
+#       (a real haplotypic dup reads ~half the retained/diploid depth)
+# ===========================================================================
+rule compleasm_db:                    # one-time lineage download (compute nodes have internet)
+    output: touch(CMPL_LIB + "/.synced")
+    params: dl=CMPL_DL, lib=CMPL_LIB
+    conda: "envs/compleasm.yaml"
+    resources: mem_mb=8000, runtime=180
+    shell:
+        r"""
+        mkdir -p {params.lib}
+        compleasm download {params.dl} --library_path {params.lib}
+        """
+
+rule compleasm:                       # {which} in {prepped,purged,hap}
+    input:
+        fa = lambda wc: purgeqc_fa(wc.iso, wc.which),
+        db = CMPL_LIB + "/.synced",
+    output:
+        summ = f"{WD}/{{iso}}/purge_qc/compleasm.{{which}}.summary.txt",
+        ft   = f"{WD}/{{iso}}/purge_qc/compleasm.{{which}}.full_table.tsv",
+    params:
+        d   = f"{WD}/{{iso}}/purge_qc/cmpl_{{which}}",
+        lin = CMPL_LIN, lib = CMPL_LIB,
+    conda: "envs/compleasm.yaml"
+    threads: T
+    resources: mem_mb=32000, runtime=300
+    shell:
+        r"""
+        rm -rf {params.d} && mkdir -p $(dirname {output.summ})
+        compleasm run -a {input.fa} -o {params.d} -t {threads} -l {params.lin} -L {params.lib}
+        cp {params.d}/summary.txt {output.summ}
+        cp "$(find {params.d} -name full_table.tsv | head -1)" {output.ft}
+        """
+
+rule purgeqc_ref:                     # combined purged + hap (hap contigs get a HAP__ prefix) + labels
+    input:
+        purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa",
+        hap    = f"{WD}/{{iso}}/purge/hap.fa",
+    output:
+        fa     = f"{WD}/{{iso}}/purge_qc/{{iso}}.combined.fa",
+        labels = f"{WD}/{{iso}}/purge_qc/labels.tsv",
+    conda: "envs/bioinf.yaml"
+    resources: mem_mb=8000, runtime=60
+    shell:
+        r"""
+        mkdir -p $(dirname {output.fa})
+        seqkit replace -p '(.+)' -r 'HAP__$1' {input.hap} > {output.fa}.haptmp
+        cat {input.purged} {output.fa}.haptmp > {output.fa}
+        rm -f {output.fa}.haptmp
+        samtools faidx {output.fa}
+        seqkit fx2tab -n -l {input.purged} | awk 'BEGIN{{OFS="\t"}} {{print $1,"purged",$NF}}'   > {output.labels}
+        seqkit fx2tab -n -l {input.hap}    | awk 'BEGIN{{OFS="\t"}} {{print "HAP__"$1,"hap",$NF}}' >> {output.labels}
+        """
+
+rule purgeqc_map:                     # {reads} in {ont,tenx}: map to combined ref, KEEP bam, mosdepth
+    input:
+        fa    = f"{WD}/{{iso}}/purge_qc/{{iso}}.combined.fa",
+        reads = lambda wc: config["ont_reads"][wc.iso] if wc.reads == "ont" else config["tenx_R2"][wc.iso],
+    output:
+        bam  = f"{WD}/{{iso}}/purge_qc/{{iso}}.{{reads}}.bam",
+        bai  = f"{WD}/{{iso}}/purge_qc/{{iso}}.{{reads}}.bam.bai",
+        summ = f"{WD}/{{iso}}/purge_qc/{{iso}}.{{reads}}.mosdepth.summary.txt",
+        reg  = f"{WD}/{{iso}}/purge_qc/{{iso}}.{{reads}}.regions.bed.gz",
+    params:
+        pre = lambda wc: "map-ont" if wc.reads == "ont" else "sr",
+        w   = config["purge_qc"]["cov_window_bp"],
+        pfx = f"{WD}/{{iso}}/purge_qc/{{iso}}.{{reads}}",
+    conda: "envs/bioinf.yaml"
+    threads: T
+    resources: mem_mb=128000, runtime=720   # same ONT map|sort OOM headroom as map_ont
+    shell:
+        r"""
+        minimap2 -ax {params.pre} -t {threads} {input.fa} {input.reads} 2>{params.pfx}.mm.log \
+          | samtools sort -@8 -m3G -T {params.pfx}.srt -o {output.bam} -
+        samtools index -@ {threads} {output.bam}
+        mosdepth -t {threads} --by {params.w} --no-per-base {params.pfx} {output.bam}
+        """
+
+rule hap_aln:                         # hap (query) vs purged (target); -c --cs -> real %id + aligned bp
+    input:
+        purged = f"{WD}/{{iso}}/purge/{{iso}}.purged.fa",
+        hap    = f"{WD}/{{iso}}/purge/hap.fa",
+    output: paf = f"{WD}/{{iso}}/purge_qc/hap_vs_purged.paf"
+    params: pre = config["purge_qc"]["hap_aln_preset"]
+    conda: "envs/bioinf.yaml"
+    threads: T
+    resources: mem_mb=32000, runtime=180
+    shell:
+        r"""
+        mkdir -p $(dirname {output.paf})
+        minimap2 -cx {params.pre} --cs -t {threads} {input.purged} {input.hap} > {output.paf} 2>{output.paf}.log
+        """
+
+rule meryl_hist:                      # 10x R2 k-mer histogram for GenomeScope2
+    input: r2 = lambda wc: config["tenx_R2"][wc.iso]
+    output: hist = f"{WD}/{{iso}}/purge_qc/{{iso}}.k{MK}.hist"
+    params: k = MK, mem_gb = 60, d = f"{WD}/{{iso}}/purge_qc/{{iso}}.k{MK}.meryl"
+    conda: "envs/merqury.yaml"
+    threads: T
+    resources: mem_mb=64000, runtime=480
+    shell:
+        r"""
+        mkdir -p $(dirname {output.hist})
+        rm -rf {params.d}
+        meryl k={params.k} threads={threads} memory={params.mem_gb} count {input.r2} output {params.d}
+        meryl histogram {params.d} > {output.hist}
+        rm -rf {params.d}
+        """
+
+rule genomescope:                     # genome-size expectation from 10x k-mers (best-effort; never blocks)
+    input: hist = f"{WD}/{{iso}}/purge_qc/{{iso}}.k{MK}.hist"
+    output: summ = f"{WD}/{{iso}}/purge_qc/{{iso}}.genomescope.summary.txt"
+    params:
+        k = MK, p = config["purge_qc"]["genomescope_ploidy"],
+        d = f"{WD}/{{iso}}/purge_qc/{{iso}}.genomescope",
+    conda: "envs/genomescope.yaml"
+    resources: mem_mb=8000, runtime=60
+    shell:
+        r"""
+        mkdir -p {params.d}
+        if genomescope2 -i {input.hist} -o {params.d} -k {params.k} -p {params.p} -n {wildcards.iso} > {params.d}/gs.log 2>&1; then
+            cp {params.d}/summary.txt {output.summ}
+        else
+            echo "GenomeScope2 FAILED -- see {params.d}/gs.log" > {output.summ}
+        fi
+        """
+
+rule purge_validate:                  # synthesize all three evidence lines -> report + plot
+    input:
+        labels       = f"{WD}/{{iso}}/purge_qc/labels.tsv",
+        cmpl_prepped = f"{WD}/{{iso}}/purge_qc/compleasm.prepped.summary.txt",
+        cmpl_purged  = f"{WD}/{{iso}}/purge_qc/compleasm.purged.summary.txt",
+        cmpl_hap     = f"{WD}/{{iso}}/purge_qc/compleasm.hap.summary.txt",
+        ft_prepped   = f"{WD}/{{iso}}/purge_qc/compleasm.prepped.full_table.tsv",
+        ft_purged    = f"{WD}/{{iso}}/purge_qc/compleasm.purged.full_table.tsv",
+        ft_hap       = f"{WD}/{{iso}}/purge_qc/compleasm.hap.full_table.tsv",
+        hap_paf      = f"{WD}/{{iso}}/purge_qc/hap_vs_purged.paf",
+        ont_summ     = f"{WD}/{{iso}}/purge_qc/{{iso}}.ont.mosdepth.summary.txt",
+        ont_reg      = f"{WD}/{{iso}}/purge_qc/{{iso}}.ont.regions.bed.gz",
+        tenx_summ    = f"{WD}/{{iso}}/purge_qc/{{iso}}.tenx.mosdepth.summary.txt",
+        tenx_reg     = f"{WD}/{{iso}}/purge_qc/{{iso}}.tenx.regions.bed.gz",
+        gs           = f"{WD}/{{iso}}/purge_qc/{{iso}}.genomescope.summary.txt",
+        stats        = f"{WD}/{{iso}}/purge/{{iso}}.purge_stats.txt",
+    output:
+        report = f"{WD}/{{iso}}/purge_qc/{{iso}}.purge_validation.txt",
+        plot   = f"{WD}/{{iso}}/purge_qc/{{iso}}.purge_validation.png",
+    params: minfrac = config["purge_qc"]["redundancy_min_frac"]
+    conda: "envs/bioinf.yaml"
+    resources: mem_mb=16000, runtime=60
+    shell:
+        r"""
+        python {SD}/purge_validate.py --iso {wildcards.iso} --labels {input.labels} \
+          --cmpl-prepped {input.cmpl_prepped} --cmpl-purged {input.cmpl_purged} --cmpl-hap {input.cmpl_hap} \
+          --ft-prepped {input.ft_prepped} --ft-purged {input.ft_purged} --ft-hap {input.ft_hap} \
+          --hap-paf {input.hap_paf} \
+          --ont-summary {input.ont_summ} --ont-regions {input.ont_reg} \
+          --tenx-summary {input.tenx_summ} --tenx-regions {input.tenx_reg} \
+          --genomescope {input.gs} --seqkit-stats {input.stats} \
+          --min-frac {params.minfrac} \
+          --out-report {output.report} --out-plot {output.plot}
         """
 
 rule scaffold_arks:
@@ -422,8 +609,8 @@ rule map_ont:
         fa  = lambda wc: asm(wc.stage).format(iso=wc.iso),
         ont = lambda wc: config["ont_reads"][wc.iso],
     output:
-        bam = temp(f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam"),
-        bai = temp(f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam.bai"),
+        bam = f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam",       # KEEP (not temp) -- ONT->assembly BAM
+        bai = f"{WD}/{{iso}}/qc_{{stage}}/{{iso}}.{{stage}}.ont.bam.bai",
         cov = f"{WD}/{{iso}}/qc_{{stage}}/cov.{{iso}}.txt",
     params: pre = config["ont_map_preset"]
     conda: "envs/bioinf.yaml"
@@ -571,10 +758,10 @@ rule qc_coverage:
         for k in ${{!isos[@]}}; do
             X=${{isos[$k]}}; R=${{reads[$k]}}
             minimap2 -ax {params.pre} -t {threads} {input.fa} $R 2>{params.d}/$X.log \
-              | samtools sort -@8 -m3G -o {params.d}/$X.bam -
-            samtools index {params.d}/$X.bam
-            samtools coverage {params.d}/$X.bam > {params.d}/cov_$X.txt
-            rm -f {params.d}/$X.bam {params.d}/$X.bam.bai
+              | samtools sort -@8 -m3G -o {params.d}/$X.consensus.ont.bam -
+            samtools index {params.d}/$X.consensus.ont.bam
+            samtools coverage {params.d}/$X.consensus.ont.bam > {params.d}/cov_$X.txt
+            # BAM kept (was rm -f'd) -- ONT vs final consensus, per isolate
         done
         python {SD}/cov_qc.py {input.fa} {params.d}/cov_MA.txt {params.d}/cov_MM.txt \
              {params.collapse} {params.lowcov} {params.tk} {params.tc} > {output.cov}

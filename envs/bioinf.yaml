@@ -9,4 +9,6 @@ dependencies:
   - seqkit=2.9.0
   - pysam=0.22.1
   - matplotlib-base=3.9.2
+  - numpy=1.26
+  - mosdepth=0.3.8
   - pigz=2.8

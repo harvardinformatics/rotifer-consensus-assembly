@@ -105,6 +105,23 @@ purge:
     MM: ""
   get_seqs_opts: "-e"           # purge haplotypic dups only at contig ends (conservative)
 
+# ---- post-purge VALIDATION QC  (target: phaseA_qc) -------------------------
+# Is hap.fa (what purge REMOVED) genuinely redundant haplotypic sequence, or did
+# purge over-cut UNIQUE content? Ohnologs are irrelevant here -- they are deeply
+# diverged / unalignable, so purge_dups' self-alignment never acts on them.
+# Checked three independent ways: compleasm markers (over/under-purge), a
+# hap->purged alignment (does each removed contig map back to a retained copy),
+# and coverage on the combined purged+hap reference from BOTH ONT and 10x
+# (a real haplotypic dup reads ~half the retained/diploid depth).
+purge_qc:
+  compleasm_lineage: metazoa_odb10   # BUSCO-style markers (bdelloid -> metazoa_odb10)
+  compleasm_libdir: /n/netscratch/informatics/Lab/tsackton/rotifer_tmp/compleasm_db
+  hap_aln_preset: asm20              # minimap2 preset hap-vs-purged (allelic dups can be % divergent)
+  redundancy_min_frac: 0.5           # hap contig aligned-fraction to purged above this => redundant
+  cov_window_bp: 10000               # mosdepth window for the depth histograms
+  meryl_k: 21                        # k-mer size for GenomeScope2 (10x reads)
+  genomescope_ploidy: 2              # diploid model (ohnologs unalignable => separate loci)
+
 # ARKS kmer mode (arcs-make arks). PROVENANCE: values below must match the run
 # that produced the accepted scaffolds -- VERIFY against SLURM logs (README).
 arks:

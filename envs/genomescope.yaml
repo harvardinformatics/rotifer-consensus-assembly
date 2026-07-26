@@ -1,0 +1,6 @@
+name: autobuild-genomescope
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - genomescope2=2.0
