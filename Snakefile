@@ -406,7 +406,13 @@ rule compleasm_db:                    # one-time lineage download (compute nodes
     resources: mem_mb=8000, runtime=180
     shell:
         r"""
-        mkdir -p {params.lib}
+        mkdir -p {params.lib}/placement_files
+        # compleasm 0.2.6 Downloader.download_placement() crashes parsing the current ezlab
+        # file_versions.tsv (strain.split(".") -> >3 parts). Placement files are only used for
+        # --autolineage; we pass -l explicitly. Pre-create the .done marker + clear any stale
+        # .tmp lock to skip that buggy path in BOTH `download` and `run`.
+        rm -f {params.lib}/placement_files.tmp
+        touch {params.lib}/placement_files.done
         compleasm download {params.dl} --library_path {params.lib}
         """
 
@@ -518,7 +524,7 @@ rule genomescope:                     # genome-size expectation from 10x k-mers 
         r"""
         mkdir -p {params.d}
         if genomescope2 -i {input.hist} -o {params.d} -k {params.k} -p {params.p} -n {wildcards.iso} > {params.d}/gs.log 2>&1; then
-            cp {params.d}/summary.txt {output.summ}
+            cp {params.d}/{wildcards.iso}_summary.txt {output.summ}
         else
             echo "GenomeScope2 FAILED -- see {params.d}/gs.log" > {output.summ}
         fi
